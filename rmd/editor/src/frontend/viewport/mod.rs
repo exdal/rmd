@@ -24,8 +24,8 @@ use self::{
     },
 };
 use super::{
-    CloseFocus, OverlayRect, PrefabMenu, UiState, VisibleMapView, context_menu::Target as MenuTarget,
-    draw_fill_limit_warning, overlay_padding, recent_button_size, update_prefab_menu,
+    CloseFocus, OverlayRect, UiState, VisibleMapView, context_menu::Target as MenuTarget, draw_fill_limit_warning,
+    overlay_padding,
 };
 use crate::{
     app::pacing::FrameDemand,
@@ -36,6 +36,10 @@ use crate::{
     gizmo::{guides::GuideBadge, panel::GizmoMapView},
     maploader::panel,
     node::panel::NodeOverlayHit,
+    palette::panel::{
+        history::recent_button_size,
+        prefab_menu::{PrefabMenu, update_prefab_menu},
+    },
     region::panel::restore_rectangle_gesture,
     session::Session,
     settings::{Settings, keybind::KeybindAction},

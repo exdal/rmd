@@ -14,8 +14,9 @@ use ui::widgets::{
 
 use crate::{
     document::{DocumentId, PrefabInstanceId},
-    frontend::{search::draw_type_path_search, welcome::codebase_relative},
+    frontend::welcome::codebase_relative,
     issues,
+    object_tree::panel::type_search::draw_type_path_search,
     search::panel::JumpTarget,
     session::Session,
     settings::Settings,

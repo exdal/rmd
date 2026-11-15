@@ -4,7 +4,8 @@ use dear_imgui_rs::{Key, MouseButton, PopupToken, Ui, WindowHoveredFlags};
 use dmm::{Coord, Prefab, PrefabInstanceId};
 use objtree::ObjectTree;
 
-use super::{EditCommand, SelectionTransform, Session, Tool, common::draw_thumbnail, draw_type_path_search};
+use super::{EditCommand, SelectionTransform, Session, Tool, common::draw_thumbnail};
+use crate::object_tree::panel::type_search::draw_type_path_search;
 use crate::{
     document::DocumentId,
     git::{blame::BlameCell, conflict::Side},
@@ -55,7 +56,7 @@ pub(super) enum Action {
     Mirror(SelectionTransform),
 }
 
-pub(super) fn begin_map_popup<'ui>(
+pub(crate) fn begin_map_popup<'ui>(
     ui: &'ui Ui, session: &Session, name: &str, document: DocumentId,
 ) -> Option<PopupToken<'ui>> {
     let popup = ui.begin_popup(name)?;
@@ -430,8 +431,8 @@ mod tests {
 
     use super::{POPUP, Target, draw_popup};
     use crate::{
-        environment::worker::LoadedMap, frontend::search::matching_type_paths_up_to_filtered, session::Session,
-        settings::Settings, tool::session::context_placement_group,
+        environment::worker::LoadedMap, object_tree::panel::type_search::matching_type_paths_up_to_filtered,
+        session::Session, settings::Settings, tool::session::context_placement_group,
     };
 
     #[test]

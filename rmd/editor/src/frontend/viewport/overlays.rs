@@ -6,10 +6,11 @@ use super::{ViewFrame, stroke::active_placement_flash};
 use crate::{
     app::pacing::FrameDemand,
     frontend::{
-        UiState, draw_guide_badges, draw_highlights, draw_history_overlay, draw_identical_outlines,
-        draw_placement_preview, draw_selected_pixel_grid, draw_tile_grid,
+        UiState, draw_guide_badges, draw_highlights, draw_identical_outlines, draw_placement_preview,
+        draw_selected_pixel_grid, draw_tile_grid,
     },
     gizmo::guides::GuideBadge,
+    palette::panel::history::draw_history_overlay,
     session::Session,
     settings::Settings,
     tool::{

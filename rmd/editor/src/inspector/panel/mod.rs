@@ -22,11 +22,12 @@ use crate::{
     app::external_editor::SourceLocation,
     document::{DocumentId, PrefabInstanceId, PrefabLocation, VarMutation, command::EditGroupId},
     frame::visual,
-    frontend::{common::IDENTICAL_EDIT_COLOR, search::draw_type_path_search},
+    frontend::common::IDENTICAL_EDIT_COLOR,
     git::blame::{self, BlameCell},
     gizmo::{direction::DirectionalTypes, transform::anchor_axis},
     inspector::session::EditScope,
     maploader::preview::PREVIEW_ID_START,
+    object_tree::panel::type_search::draw_type_path_search,
     session::Session,
     settings::Settings,
 };

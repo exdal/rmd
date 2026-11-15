@@ -5,7 +5,7 @@ use ui::{
     widgets::{dpi, fit_icon},
 };
 
-use crate::session::PrefabThumbnail;
+use crate::palette::session::PrefabThumbnail;
 
 const ORIGIN_RADIUS: f32 = 3.0;
 const ORIGIN_MAX_DISTANCE: f32 = 32.0;
@@ -15,12 +15,12 @@ const ORIGIN_COLOR: [f32; 4] = [1.0, 0.5, 0.0, 1.0];
 pub(crate) const IDENTICAL_EDIT_COLOR: [f32; 4] = [1.0, 0.7, 0.15, 1.0];
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct IconOrigin {
+pub(crate) struct IconOrigin {
     pub offset: [i32; 2],
     pub tile_size: u32,
 }
 
-pub(super) fn draw_thumbnail(
+pub(crate) fn draw_thumbnail(
     ui: &Ui, thumbnail: Option<PrefabThumbnail>, min: [f32; 2], extent: f32, origin: Option<IconOrigin>,
 ) {
     let draw = ui.get_window_draw_list();

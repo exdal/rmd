@@ -4,10 +4,10 @@ use dmm::Prefab;
 use objtree::TypeId;
 use render::{SpriteTexture, texture::TextureCatalog};
 
-use super::Session;
 use crate::{
     environment::Environment,
     frame::{self, visual},
+    session::Session,
     tool::{Tool, is_placeable},
 };
 
@@ -108,7 +108,7 @@ impl Session {
         self.type_thumbnails.get(&id).copied().flatten()
     }
 
-    pub(super) fn prefab_thumbnail_for(
+    pub(crate) fn prefab_thumbnail_for(
         &self, environment: &Environment, appearance: &visual::Appearance,
     ) -> Option<PrefabThumbnail> {
         prefab_thumbnail_or_missing(&self.textures, environment, appearance)

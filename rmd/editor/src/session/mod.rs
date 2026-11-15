@@ -18,20 +18,17 @@ use crate::{
     inspector::session::IdenticalCache,
     maploader::preview::ModulePreviewState,
     node::session::NodeEditState,
+    palette::session::PrefabThumbnail,
     region::session::RegionState,
 };
 
 #[cfg(test)]
 pub(crate) mod fixtures;
 pub(crate) mod highlight;
-mod palette;
 mod preview;
 
 use self::preview::RegionPreviewCache;
-pub(crate) use self::{
-    palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
-    preview::{PlacementPreview, RegionPreviewSource},
-};
+pub(crate) use self::preview::{PlacementPreview, RegionPreviewSource};
 
 #[derive(Default)]
 pub(crate) enum BakeHold {

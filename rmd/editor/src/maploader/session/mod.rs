@@ -2,7 +2,6 @@ use std::{collections::HashSet, mem, path::Path, sync::Arc};
 
 use dmm::Prefab;
 
-use crate::session::{BakeHold, PlacementPreview, Session, prefab_thumbnail_or_missing};
 use crate::{
     document::{DocumentId, MapDocument, PrefabInstanceId},
     frame::visual,
@@ -10,6 +9,8 @@ use crate::{
         LoadedModule, OpenModule,
         preview::{ComposeContext, MapView, ModulePreviewState, ModuleRootKey, ModuleRootPreview, PREVIEW_ID_START},
     },
+    palette::session::prefab_thumbnail_or_missing,
+    session::{BakeHold, PlacementPreview, Session},
 };
 
 #[cfg(test)]

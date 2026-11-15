@@ -25,7 +25,7 @@ use crate::{
         conflict::ConflictData,
         repo::{self, RepoPath},
     },
-    session::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
+    palette::session::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

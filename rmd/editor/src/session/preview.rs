@@ -1,7 +1,8 @@
 use dmm::{Coord, Prefab};
 use render::SpriteInstance;
 
-use super::{PrefabThumbnail, Session};
+use super::Session;
+use crate::palette::session::PrefabThumbnail;
 use crate::{
     document::{DocumentId, PrefabInstanceId, Selection},
     environment::Environment,

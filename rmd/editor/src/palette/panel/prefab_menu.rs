@@ -4,12 +4,12 @@ use dear_imgui_rs::{Ui, sys};
 use dmm::Prefab;
 use ui::widgets::dpi;
 
-use super::{
-    common::{IconOrigin, draw_thumbnail},
-    context_menu::begin_map_popup,
-};
 use crate::{
     document::DocumentId,
+    frontend::{
+        common::{IconOrigin, draw_thumbnail},
+        context_menu::begin_map_popup,
+    },
     session::{PlacementPreview, Session},
     settings::{Settings, keybind::KeybindAction},
 };
@@ -28,7 +28,7 @@ struct Row {
     height: f32,
 }
 
-pub(super) struct PrefabMenu {
+pub(crate) struct PrefabMenu {
     document: DocumentId,
     tile_size: u32,
     icon_extent: f32,
@@ -92,7 +92,7 @@ fn override_lines(prefab: &Prefab) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn update_prefab_menu(
+pub(crate) fn update_prefab_menu(
     ui: &Ui, session: &mut Session, settings: &Settings, document: DocumentId, is_focused: bool,
     menu: &mut Option<PrefabMenu>,
 ) {

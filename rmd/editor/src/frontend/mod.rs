@@ -14,7 +14,7 @@ use dmm::{Coord, PrefabInstanceId};
 use render::{Camera, GuideLine, MapViewInteraction, MapViewRect};
 use ui::theme::Themes;
 
-use self::{object_tree::ObjectTreePanel, settings::SettingsWindow};
+use self::settings::SettingsWindow;
 use crate::{
     app::{external_editor::SourceLocation, pacing::FrameDemand, update::UpdateCheck},
     bake::panel::RuntimesPanel,
@@ -35,6 +35,7 @@ use crate::{
     gizmo::panel::GizmoState,
     inspector::panel::InspectorPanel,
     issues::panel::IssuesPanel,
+    object_tree::panel::ObjectTreePanel,
     region::panel::RegionSelectionOptions,
     search::panel::{FindPanel, SimilarMatchKind},
     session::Session,
@@ -52,11 +53,8 @@ pub(crate) mod dialog;
 #[cfg(test)]
 mod fixtures;
 mod grid;
-mod history;
 mod menu;
 pub(crate) mod overlay;
-mod prefab_menu;
-pub(crate) mod search;
 pub(crate) mod viewport;
 pub(crate) mod welcome;
 
@@ -69,14 +67,11 @@ use self::{
         draw_new_map_dialog, draw_resize_map_dialog, draw_save_dialog,
     },
     grid::{draw_selected_pixel_grid, draw_tile_grid},
-    history::{draw_history_overlay, recent_button_size},
     menu::MenuActions,
     overlay::{
         OverlayRect, conflict_controls_layout, draw_conflict_controls, draw_guide_badges, draw_highlights,
-        draw_identical_outlines, draw_overlay_underlay, draw_placement_preview, overlay_padding,
+        draw_identical_outlines, draw_placement_preview, overlay_padding,
     },
-    prefab_menu::{PrefabMenu, update_prefab_menu},
-    search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search},
     viewport::{
         ActivePlacementFlash, EDIT_KEYS, EditCommand, MapViewState, MomentaryTool, MoveStroke, PickStroke,
         PlacementStroke,
@@ -86,11 +81,9 @@ use self::{
 
 pub(crate) mod common;
 
-mod context_menu;
+pub(crate) mod context_menu;
 
-mod object_tree;
-
-mod settings;
+pub(crate) mod settings;
 
 const DOCKSPACE_ID: &str = "rmd-main-dockspace-v4";
 
@@ -216,7 +209,7 @@ enum CloseFocus {
 }
 
 pub struct UiState {
-    object_tree: ObjectTreePanel,
+    pub(crate) object_tree: ObjectTreePanel,
     pub(crate) map_views: HashMap<DocumentId, MapViewState>,
     pub(crate) central_node: Option<Id>,
     pub(crate) dockspace_root: Option<Id>,

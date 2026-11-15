@@ -2,12 +2,14 @@ use dear_imgui_rs::{StyleColor, Ui};
 use dmm::Prefab;
 use ui::widgets::dpi;
 
-use super::{
-    OverlayRect,
-    common::{IconOrigin, draw_thumbnail},
-    draw_overlay_underlay, overlay_padding,
+use crate::{
+    frontend::{
+        common::{IconOrigin, draw_thumbnail},
+        overlay::{OverlayRect, draw_overlay_underlay, overlay_padding},
+    },
+    session::Session,
+    settings::keybind::KeyBindings,
 };
-use crate::{session::Session, settings::keybind::KeyBindings};
 
 const RECENT_ICON_SIZE: f32 = 48.0;
 
@@ -15,7 +17,7 @@ const RECENT_BADGE_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.8];
 
 const RECENT_BADGE_TEXT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
-pub(super) fn draw_history_overlay(
+pub(crate) fn draw_history_overlay(
     ui: &Ui, session: &mut Session, keybindings: KeyBindings, bounds: OverlayRect, recent_prefabs: Vec<Prefab>,
 ) {
     draw_overlay_underlay(ui, bounds);
@@ -63,7 +65,7 @@ pub(super) fn draw_history_overlay(
     }
 }
 
-pub(super) fn recent_button_size(ui: &Ui) -> f32 {
+pub(crate) fn recent_button_size(ui: &Ui) -> f32 {
     let padding = ui.clone_style().frame_padding();
 
     RECENT_ICON_SIZE * dpi(ui) + padding[0].max(padding[1]) * 2.0

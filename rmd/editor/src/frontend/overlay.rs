@@ -365,7 +365,7 @@ mod tests {
         camera.camera.y = 40.0;
         camera.camera.zoom = 2.0;
         let preview = PlacementPreview {
-            thumbnail: crate::session::PrefabThumbnail {
+            thumbnail: crate::palette::session::PrefabThumbnail {
                 texture: SpriteTexture {
                     width: 64,
                     height: 32,

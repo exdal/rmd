@@ -8,15 +8,17 @@ use ui::{
     widgets::{dpi, focus_window_on_hover},
 };
 
-use super::{
-    common::draw_thumbnail,
-    settings::{draw_object_tree_filter_settings, draw_object_tree_search_settings},
-};
 use crate::{
     app::external_editor::SourceLocation,
+    frontend::{
+        common::draw_thumbnail,
+        settings::{draw_object_tree_filter_settings, draw_object_tree_search_settings},
+    },
     session::Session,
     settings::{ObjectTreeFilterOptions, ObjectTreeSearchOptions, Settings},
 };
+
+pub(crate) mod type_search;
 
 const OBJECT_TREE_FILTER_OPTIONS_POPUP: &str = "object-tree-filter-options-popup";
 const OBJECT_TREE_OPTIONS_POPUP: &str = "object-tree-options-popup";
@@ -121,11 +123,11 @@ struct ObjectTreeOutput {
 }
 
 #[derive(Default)]
-pub(super) struct ObjectTreePanelOutput {
-    pub(super) open_source: Option<SourceLocation>,
-    pub(super) find: Option<TreePath>,
-    pub(super) copy_path: Option<String>,
-    pub(super) docked: bool,
+pub(crate) struct ObjectTreePanelOutput {
+    pub(crate) open_source: Option<SourceLocation>,
+    pub(crate) find: Option<TreePath>,
+    pub(crate) copy_path: Option<String>,
+    pub(crate) docked: bool,
 }
 
 impl ObjectTreeFilter {
@@ -171,7 +173,7 @@ impl ObjectTreeFilter {
     }
 }
 
-pub(super) struct ObjectTreePanel {
+pub(crate) struct ObjectTreePanel {
     window: WindowKey,
     selected: Option<TypeId>,
     reveal: Option<TypeId>,
@@ -181,7 +183,7 @@ pub(super) struct ObjectTreePanel {
 }
 
 impl ObjectTreePanel {
-    pub(super) fn new() -> Result<Self, WindowKeyError> {
+    pub(crate) fn new() -> Result<Self, WindowKeyError> {
         Ok(Self {
             window: WindowKey::new("object-tree", "Object tree")?,
             selected: None,
@@ -192,11 +194,11 @@ impl ObjectTreePanel {
         })
     }
 
-    pub(super) const fn window(&self) -> &WindowKey {
+    pub(crate) const fn window(&self) -> &WindowKey {
         &self.window
     }
 
-    pub(super) fn reveal_picked_instance(&mut self, session: &Session) {
+    pub(crate) fn reveal_picked_instance(&mut self, session: &Session) {
         let Some(selected) = session
             .picked_prefab()
             .and_then(|prefab| session.tree()?.id_of(&prefab.path))
@@ -208,11 +210,11 @@ impl ObjectTreePanel {
         self.reveal = Some(selected);
     }
 
-    pub(super) fn invalidate_filter(&mut self) {
+    pub(crate) fn invalidate_filter(&mut self) {
         self.filter_revision = u64::MAX;
     }
 
-    pub(super) fn draw(
+    pub(crate) fn draw(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, focus: bool, open: &mut bool,
     ) -> ObjectTreePanelOutput {
         let mut panel = ObjectTreePanelOutput::default();
@@ -654,7 +656,7 @@ fn draw_object_tree_lines(
     }
 }
 
-fn draw_type_icon(ui: &Ui, thumbnail: Option<crate::session::PrefabThumbnail>, cursor: [f32; 2]) {
+fn draw_type_icon(ui: &Ui, thumbnail: Option<crate::palette::session::PrefabThumbnail>, cursor: [f32; 2]) {
     let row_min = ui.item_rect_min();
     let row_max = ui.item_rect_max();
     let row_height = (row_max[1] - row_min[1]).max(1.0);
@@ -715,7 +717,7 @@ mod tests {
     use ui::testing::CONTEXT_LOCK;
 
     use super::{
-        super::{MAX_CUSTOM_FILL_SEARCH_RESULTS, search::matching_type_paths_up_to_filtered},
+        type_search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, matching_type_paths_up_to_filtered},
         *,
     };
     use crate::{document::MapDocument, tool::Tool};

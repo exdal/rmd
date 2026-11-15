@@ -1147,7 +1147,7 @@ fn draw_object_tree_settings(ui: &Ui, settings: &mut Settings) -> bool {
     changed
 }
 
-pub(super) fn draw_object_tree_search_settings(ui: &Ui, options: &mut ObjectTreeSearchOptions) -> bool {
+pub(crate) fn draw_object_tree_search_settings(ui: &Ui, options: &mut ObjectTreeSearchOptions) -> bool {
     let mut changed = false;
     let disable_type_paths = options.type_paths && !options.names;
     {
@@ -1164,7 +1164,7 @@ pub(super) fn draw_object_tree_search_settings(ui: &Ui, options: &mut ObjectTree
     changed
 }
 
-pub(super) fn draw_object_tree_filter_settings(ui: &Ui, options: &mut ObjectTreeFilterOptions) -> bool {
+pub(crate) fn draw_object_tree_filter_settings(ui: &Ui, options: &mut ObjectTreeFilterOptions) -> bool {
     let mut changed = false;
     changed |= ui.checkbox("Filter /atom", &mut options.atom);
     changed |= ui.checkbox("Filter /movable", &mut options.movable);

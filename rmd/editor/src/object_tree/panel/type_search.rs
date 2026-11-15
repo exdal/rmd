@@ -31,7 +31,7 @@ pub(crate) fn draw_type_path_search(
 
 // im not sure why every single fucking icons appear not centered fuck you
 
-pub(super) fn matching_type_paths_up_to_filtered(
+pub(crate) fn matching_type_paths_up_to_filtered(
     tree: &ObjectTree, query: &str, limit: usize, allowed: impl Fn(&TreePath) -> bool,
 ) -> Vec<TreePath> {
     let query = query.trim().to_ascii_lowercase();

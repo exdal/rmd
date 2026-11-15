@@ -8,11 +8,11 @@ use ui::testing::rectangle_context;
 
 use super::{
     MapViewState, OverlayRect, UiState, conflict_controls_layout, menu::MenuActions, overlay_padding,
-    recent_button_size, viewport::MapViewDraw,
+    viewport::MapViewDraw,
 };
 use crate::{
-    document::DocumentId, maploader::panel::controls_layout as module_controls_layout, session::Session,
-    settings::Settings,
+    document::DocumentId, maploader::panel::controls_layout as module_controls_layout,
+    palette::panel::history::recent_button_size, session::Session, settings::Settings,
 };
 
 pub(super) struct RectangleUiHarness {

@@ -8,7 +8,8 @@ use ui::{
     widgets::{DialogButton, begin_centered_modal, dialog_buttons, dpi},
 };
 
-use super::{MAX_CUSTOM_FILL_SEARCH_RESULTS, UiState, draw_type_path_search};
+use super::UiState;
+use crate::object_tree::panel::type_search::{MAX_CUSTOM_FILL_SEARCH_RESULTS, draw_type_path_search};
 use crate::{
     document::{DocumentId, MapDocument},
     environment::panel::DIAGNOSTIC_WARNING_COLOR,

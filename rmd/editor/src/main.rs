@@ -26,6 +26,8 @@ mod inspector;
 mod issues;
 mod maploader;
 mod node;
+mod object_tree;
+mod palette;
 mod region;
 mod search;
 mod session;
