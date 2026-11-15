@@ -78,6 +78,7 @@
 	InitGlobalstarlight_range()
 	InitGlobalstarlight_power()
 	InitGlobalstarlight_color()
+	InitGlobalmarker_beacon_colors()
 	InitGlobalareas()
 	InitGlobalareas_by_type()
 	InitGlobalstation_levels_cache()
@@ -356,6 +357,50 @@
 /datum/demir/novasector/highlights(atom/target)
 	return target.demir_highlights()
 
+/datum/demir/novasector/process_modular_root(list/roots)
+	var/list/configs = list()
+	var/list/placements = list()
+	for(var/obj/modular_map_root/root as anything in roots)
+		if(!root.config_file || !root.key)
+			continue
+
+		var/path = root.config_file
+		if(!(path in configs))
+			configs[path] = read_module_config(path)
+
+		var/list/config = configs[path]
+		if(istext(config))
+			placements += list(list("root" = root, "error" = config))
+			continue
+
+		var/list/rooms = config["rooms"]
+		var/list/room = rooms && rooms[root.key]
+		if(!room)
+			placements += list(list("root" = root, "error" = "no room [root.key] in [path]"))
+			continue
+
+		var/list/files = list()
+		for(var/file in room["modules"])
+			files += config["directory"] + file
+
+		placements += list(list(
+			"root" = root,
+			"maps" = files,
+			"anchor" = /obj/modular_map_connector,
+			"skip" = list(/turf/template_noop, /area/template_noop),
+		))
+	demir_place_modular(placements)
+
+/datum/demir/novasector/proc/read_module_config(path)
+	var/text = file2text(path)
+	if(!text)
+		return "cannot read [path]"
+
+	try
+		return demir_toml_decode(text)
+	catch(var/exception/error)
+		return "invalid [path]: [error.name]"
+
 // Same DISP_DIR_* rule as the pipe's Initialize().
 /datum/demir/novasector/proc/register_disposal_node_orientations()
 	for(var/type_path in typesof(/obj/structure/disposalpipe))
@@ -386,6 +431,7 @@
 
 /datum/demir/novasector
 	default = TRUE
+	light_corner_step = LIGHTING_ROUND_VALUE
 	var/smooth = TRUE
 	var/lighting = TRUE
 	var/show_cables = TRUE
@@ -399,6 +445,8 @@
 		..()
 		if(!GLOB)
 			GLOB = new /datum/controller/global_vars/demir_preview
+
+		demir_modular_root(/obj/modular_map_root)
 
 		// Groups include subtypes, so the /visible pipes are in DEMIR_GROUP_PIPES too. Rebaking
 		// them changes nothing.
@@ -481,6 +529,11 @@
 		src.power_all = powered_all
 		demir_rebake(DEMIR_BAKE_LIGHT, DEMIR_GROUP_POWER)
 		demir_rebake(DEMIR_BAKE_APPEARANCE, DEMIR_GROUP_POWER)
+
+	imgui_separator("Modular maps")
+	var/previewed = imgui_checkbox("Preview modules", demir_modular_preview())
+	if(previewed != demir_modular_preview())
+		demir_set_modular_preview(previewed)
 
 	imgui_end()
 
@@ -736,6 +789,10 @@
 // Space areas are fullbright. Only space tiles next to a lit turf call enable_starlight().
 /turf/open/space
 	demir_light_edge_only = 1
+
+/obj/structure/marker_beacon/demir_apply_light()
+	update_appearance()
+	return ..()
 
 /turf/open/space/demir_apply_light()
 	demir_light_range = GLOB.starlight_range
