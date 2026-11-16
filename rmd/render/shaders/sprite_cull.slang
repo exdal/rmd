@@ -26,9 +26,9 @@ RWStructuredBuffer<DrawIndirectCommand> draw_commands;
 [[vk::binding(4, 0)]]
 RWStructuredBuffer<CullChunk> chunks;
 
-// per subgroup, one byte per list
-groupshared u32 subgroup_visible[WORKGROUP_SIZE];
-groupshared u32 subgroup_underlay[WORKGROUP_SIZE];
+// per invocation, one byte per list
+groupshared u32 chunk_visible[WORKGROUP_SIZE];
+groupshared u32 chunk_underlay[WORKGROUP_SIZE];
 groupshared u32 scan_visible[SPRITE_LIST_COUNT * SCAN_SIZE];
 groupshared u32 scan_underlay[SPRITE_LIST_COUNT * SCAN_SIZE];
 
@@ -81,44 +81,29 @@ struct ChunkScan {
 
 // this could have totally be done in a for loop, but we scalarize
 func scan_chunk(u32 group_thread_id, bool visible, bool underlay, u32 list) -> ChunkScan {
-    var prefix_visible = 0u;
-    var prefix_underlay = 0u;
-    var subgroup_total_visible = 0u;
-    var subgroup_total_underlay = 0u;
-    for (u32 index = 0; index < SPRITE_LIST_COUNT; index++) {
-        let in_list = visible && list == index;
-        let in_underlay = in_list && underlay;
-        let shift = 8u * index;
-
-        prefix_visible += (WavePrefixCountBits(in_list) + u32(in_list)) << shift;
-        prefix_underlay += (WavePrefixCountBits(in_underlay) + u32(in_underlay)) << shift;
-        subgroup_total_visible += WaveActiveCountBits(in_list) << shift;
-        subgroup_total_underlay += WaveActiveCountBits(in_underlay) << shift;
-    }
-
-    let subgroup_size = WaveGetLaneCount();
-    let subgroup = group_thread_id / subgroup_size;
-    if (WaveIsFirstLane()) {
-        subgroup_visible[subgroup] = subgroup_total_visible;
-        subgroup_underlay[subgroup] = subgroup_total_underlay;
-    }
+    let bit = 1u << (8u * list);
+    chunk_visible[group_thread_id] = visible ? bit : 0u;
+    chunk_underlay[group_thread_id] = visible && underlay ? bit : 0u;
 
     GroupMemoryBarrierWithGroupSync();
 
-    ChunkScan scan;
-    scan.visible = prefix_visible;
-    scan.underlay = prefix_underlay;
-    scan.total_visible = 0;
-    scan.total_underlay = 0;
-    for (u32 index = 0; index < (WORKGROUP_SIZE + subgroup_size - 1) / subgroup_size; index++) {
-        if (index < subgroup) {
-            scan.visible += subgroup_visible[index];
-            scan.underlay += subgroup_underlay[index];
-        }
+    for (u32 width = 1; width < WORKGROUP_SIZE; width *= 2) {
+        let carry_visible = group_thread_id >= width ? chunk_visible[group_thread_id - width] : 0u;
+        let carry_underlay = group_thread_id >= width ? chunk_underlay[group_thread_id - width] : 0u;
 
-        scan.total_visible += subgroup_visible[index];
-        scan.total_underlay += subgroup_underlay[index];
+        GroupMemoryBarrierWithGroupSync();
+
+        chunk_visible[group_thread_id] += carry_visible;
+        chunk_underlay[group_thread_id] += carry_underlay;
+
+        GroupMemoryBarrierWithGroupSync();
     }
+
+    ChunkScan scan;
+    scan.visible = chunk_visible[group_thread_id];
+    scan.underlay = chunk_underlay[group_thread_id];
+    scan.total_visible = chunk_visible[WORKGROUP_SIZE - 1];
+    scan.total_underlay = chunk_underlay[WORKGROUP_SIZE - 1];
 
     return scan;
 }
