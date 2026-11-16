@@ -28,7 +28,21 @@ impl BindlessDescriptorSet {
             .descriptor_count(count)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE);
         let bindings = [binding];
-        let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        let (binding_flags, layout_flags, pool_flags) = match device.is_update_after_bind {
+            true => (
+                vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+                vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
+                vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND,
+            ),
+            false => Default::default(),
+        };
+        let binding_flags = [binding_flags];
+        let mut binding_flags_info =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
+        let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+            .flags(layout_flags)
+            .bindings(&bindings)
+            .push_next(&mut binding_flags_info);
         let layout = unsafe { vk_device.create_descriptor_set_layout(&layout_info, None) }?;
 
         let pool_size = vk::DescriptorPoolSize::default()
@@ -36,6 +50,7 @@ impl BindlessDescriptorSet {
             .descriptor_count(count);
         let pool_sizes = [pool_size];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .flags(pool_flags)
             .max_sets(1)
             .pool_sizes(&pool_sizes);
         let pool = match unsafe { vk_device.create_descriptor_pool(&pool_info, None) } {

@@ -16,6 +16,7 @@ pub struct Device {
     pub max_bindless_textures: u32,
     pub max_compute_work_group_count_x: u32,
     pub max_image_dimension_2d: u32,
+    pub is_update_after_bind: bool,
     graphics_family: u32,
     entry: ash::Entry,
 }
@@ -24,14 +25,15 @@ impl Device {
     pub fn new(window: RawWindowHandle, display: RawDisplayHandle) -> Result<Self, GpuError> {
         let entry = load_entry()?;
         let instance = create_instance(&entry, window)?;
-        let (
+        let SelectedDevice {
             physical_device,
             queue_families,
             max_bindless_textures,
             max_compute_work_group_count_x,
             max_image_dimension_2d,
-        ) = select_physical_device(&instance)?;
-        let device = create_device(&instance, physical_device)?;
+            is_update_after_bind,
+        } = select_physical_device(&instance)?;
+        let device = create_device(&instance, physical_device, is_update_after_bind)?;
 
         let mut context = Context::new(device, physical_device, instance, &entry)?;
         let graphics = first_queue(&queue_families, vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
@@ -51,6 +53,7 @@ impl Device {
             max_bindless_textures,
             max_compute_work_group_count_x,
             max_image_dimension_2d,
+            is_update_after_bind,
             graphics_family: graphics,
         })
     }
@@ -204,9 +207,36 @@ fn create_instance(entry: &ash::Entry, window: RawWindowHandle) -> Result<ash::I
     Ok(unsafe { entry.create_instance(&create_info, None) }?)
 }
 
-fn select_physical_device(
-    instance: &ash::Instance,
-) -> Result<(vk::PhysicalDevice, Vec<vk::QueueFamilyProperties>, u32, u32, u32), GpuError> {
+struct SelectedDevice {
+    physical_device: vk::PhysicalDevice,
+    queue_families: Vec<vk::QueueFamilyProperties>,
+    max_bindless_textures: u32,
+    max_compute_work_group_count_x: u32,
+    max_image_dimension_2d: u32,
+    is_update_after_bind: bool,
+}
+
+fn bindless_texture_limit(
+    limits: &vk::PhysicalDeviceLimits, vk12: &vk::PhysicalDeviceVulkan12Properties, is_update_after_bind: bool,
+) -> u32 {
+    if is_update_after_bind {
+        return vk12
+            .max_per_stage_descriptor_update_after_bind_sampled_images
+            .min(vk12.max_descriptor_set_update_after_bind_sampled_images)
+            .min(vk12.max_per_stage_descriptor_update_after_bind_samplers)
+            .min(vk12.max_descriptor_set_update_after_bind_samplers)
+            .min(vk12.max_per_stage_update_after_bind_resources.saturating_sub(1));
+    }
+
+    limits
+        .max_per_stage_descriptor_sampled_images
+        .min(limits.max_descriptor_set_sampled_images)
+        .min(limits.max_per_stage_descriptor_samplers)
+        .min(limits.max_descriptor_set_samplers)
+        .min(limits.max_per_stage_resources.saturating_sub(1))
+}
+
+fn select_physical_device(instance: &ash::Instance) -> Result<SelectedDevice, GpuError> {
     let minimum = vk::make_api_version(0, 1, 3, 0);
     let devices = unsafe { instance.enumerate_physical_devices() }?;
 
@@ -233,8 +263,13 @@ fn select_physical_device(
                 return None;
             }
 
+            let is_update_after_bind = vk12.descriptor_binding_sampled_image_update_after_bind == vk::TRUE;
+
             let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
-            let mut properties2 = vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup);
+            let mut vk12_properties = vk::PhysicalDeviceVulkan12Properties::default();
+            let mut properties2 = vk::PhysicalDeviceProperties2::default()
+                .push_next(&mut subgroup)
+                .push_next(&mut vk12_properties);
             unsafe { instance.get_physical_device_properties2(handle, &mut properties2) };
             if !subgroup.supported_stages.contains(vk::ShaderStageFlags::COMPUTE)
                 || !subgroup
@@ -248,38 +283,46 @@ fn select_physical_device(
             first_queue(&families, vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)?;
 
             let limits = properties.limits;
-            let max_bindless_textures = limits
-                .max_per_stage_descriptor_sampled_images
-                .min(limits.max_descriptor_set_sampled_images)
-                .min(limits.max_per_stage_descriptor_samplers)
-                .min(limits.max_descriptor_set_samplers)
-                .min(limits.max_per_stage_resources.saturating_sub(1));
+            let max_bindless_textures = bindless_texture_limit(&limits, &vk12_properties, is_update_after_bind);
             if max_bindless_textures == 0 {
                 return None;
             }
 
             Some((
-                handle,
-                properties.device_type,
-                families,
-                max_bindless_textures,
-                limits.max_compute_work_group_count[0],
-                limits.max_image_dimension2_d,
+                properties,
+                SelectedDevice {
+                    physical_device: handle,
+                    queue_families: families,
+                    max_bindless_textures,
+                    max_compute_work_group_count_x: limits.max_compute_work_group_count[0],
+                    max_image_dimension_2d: limits.max_image_dimension2_d,
+                    is_update_after_bind,
+                },
             ))
         })
         .collect::<Vec<_>>();
 
-    candidates.sort_by_key(|(_, device_type, ..)| {
+    candidates.sort_by_key(|(properties, _)| {
         (
-            *device_type != vk::PhysicalDeviceType::DISCRETE_GPU,
-            device_type.as_raw(),
+            properties.device_type != vk::PhysicalDeviceType::DISCRETE_GPU,
+            properties.device_type.as_raw(),
         )
     });
 
-    let (handle, _, families, max_bindless_textures, max_compute_work_group_count_x, max_image_dimension_2d) =
-        candidates.into_iter().next().ok_or(GpuError::NoSuitableDevice)?;
+    let (properties, selected) = candidates.into_iter().next().ok_or(GpuError::NoSuitableDevice)?;
+    log::info!(
+        "gpu: {} ({:?}, driver {:#x}), {} bindless textures, update after bind: {}",
+        properties
+            .device_name_as_c_str()
+            .unwrap_or(c"unknown")
+            .to_string_lossy(),
+        properties.device_type,
+        properties.driver_version,
+        selected.max_bindless_textures,
+        selected.is_update_after_bind,
+    );
 
-    let memory = unsafe { instance.get_physical_device_memory_properties(handle) };
+    let memory = unsafe { instance.get_physical_device_memory_properties(selected.physical_device) };
     for (index, heap) in memory.memory_heaps[..memory.memory_heap_count as usize]
         .iter()
         .enumerate()
@@ -302,16 +345,12 @@ fn select_physical_device(
         );
     }
 
-    Ok((
-        handle,
-        families,
-        max_bindless_textures,
-        max_compute_work_group_count_x,
-        max_image_dimension_2d,
-    ))
+    Ok(selected)
 }
 
-fn create_device(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Result<ash::Device, GpuError> {
+fn create_device(
+    instance: &ash::Instance, physical_device: vk::PhysicalDevice, is_update_after_bind: bool,
+) -> Result<ash::Device, GpuError> {
     let families = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
     let priorities = [1.0_f32];
     let queues = (0..families.len() as u32)
@@ -337,7 +376,8 @@ fn create_device(instance: &ash::Instance, physical_device: vk::PhysicalDevice) 
         .buffer_device_address(true)
         .scalar_block_layout(true)
         .runtime_descriptor_array(true)
-        .shader_sampled_image_array_non_uniform_indexing(true);
+        .shader_sampled_image_array_non_uniform_indexing(true)
+        .descriptor_binding_sampled_image_update_after_bind(is_update_after_bind);
     let mut vk11 = vk::PhysicalDeviceVulkan11Features::default()
         .variable_pointers(true)
         .variable_pointers_storage_buffer(true)
