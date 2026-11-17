@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, Tile, key::Key, merge::tiles_equal};
+use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, Tile, key::Key, tiles_equal};
 
 use crate::document::{instance::PlacedPrefab, instance::PrefabInstance, instance::PrefabLocation};
 
@@ -465,6 +465,9 @@ fn index_in(size: Size, coord: Coord) -> Option<usize> {
 fn paths(tile: &Tile) -> Vec<&TreePath> {
     tile.iter().map(|prefab| &prefab.path).collect()
 }
+
+#[cfg_attr(not(test), expect(dead_code))]
+mod table;
 
 #[cfg(test)]
 mod tests;

@@ -1,9 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use dmm::{
-    Coord, Prefab, Tile,
-    merge::{TileConflict, tiles_equal},
-};
+use dmm::{Coord, Prefab, Tile, merge::TileConflict, tiles_equal};
 
 use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},

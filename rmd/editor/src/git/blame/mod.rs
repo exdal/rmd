@@ -2,7 +2,7 @@ pub(crate) mod session;
 
 use std::collections::HashMap;
 
-use dmm::{Coord, Map, Size, Tile, key::Key, merge::tiles_equal, writer::format_value};
+use dmm::{Coord, Map, Size, Tile, key::Key, tiles_equal, writer::format_value};
 
 use crate::git::repo::{CommitInfo, FileVersion, GitError, Repo, RepoPath, parse_map};
 

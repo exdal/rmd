@@ -5,11 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use dmm::{
-    Coord, Map, Prefab, Size, Tile,
-    key::Key,
-    merge::{prefabs_equal, tiles_equal},
-};
+use dmm::{Coord, Map, Prefab, Size, Tile, key::Key, prefabs_equal, tiles_equal};
 
 use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},

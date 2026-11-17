@@ -9,7 +9,11 @@ use base::{
     path::TreePath,
     types::{Identifier, Value},
 };
-use std::{collections::HashMap, num::NonZeroU64};
+use std::{
+    collections::HashMap,
+    hash::{Hash, Hasher},
+    num::NonZeroU64,
+};
 
 use crate::key::Key;
 
@@ -76,6 +80,12 @@ impl VarValue {
     }
 }
 
+impl Hash for VarValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
+    }
+}
+
 impl From<Value> for VarValue {
     fn from(value: Value) -> Self {
         Self::new(value)
@@ -83,7 +93,7 @@ impl From<Value> for VarValue {
 }
 
 /// Vars stay in file order
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Prefab {
     pub path: TreePath,
     pub vars: Vec<(Identifier, VarValue)>,
@@ -127,7 +137,21 @@ impl Prefab {
     }
 }
 
+pub fn prefabs_equal(left: &Prefab, right: &Prefab) -> bool {
+    left.path == right.path
+        && left.vars.len() == right.vars.len()
+        && left
+            .vars
+            .iter()
+            .zip(&right.vars)
+            .all(|((left_name, left), (right_name, right))| left_name == right_name && left.value == right.value)
+}
+
 pub type Tile = Vec<Prefab>;
+
+pub fn tiles_equal(left: &Tile, right: &Tile) -> bool {
+    left.len() == right.len() && left.iter().zip(right).all(|(left, right)| prefabs_equal(left, right))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MapFormat {
@@ -300,8 +324,9 @@ impl Map {
 #[cfg(test)]
 mod tests {
     use base::path::TreePath;
+    use std::hash::{BuildHasher, RandomState};
 
-    use crate::{Map, Prefab, Size, key::Key};
+    use crate::{Coord, Map, Prefab, Size, key::Key, parser::parse, prefabs_equal};
 
     fn tile(path: &str) -> Vec<Prefab> {
         vec![Prefab::new(TreePath::parse(path))]
@@ -474,5 +499,22 @@ mod tests {
         }
 
         assert_eq!(map.key_at(crate::Coord::new(1, 1, 1)), Some(Key(7)));
+    }
+
+    #[test]
+    fn prefabs_equal_apart_from_their_spelling_hash_the_same() {
+        let (spelled, errors) = parse(concat!(
+            "\"a\" = (/obj/sign{n = 1.30; zero = -0; names = list(\"a\", \"b\")})\n",
+            "\"b\" = (/obj/sign{n = 1.3; zero = 0; names = list(\"a\",\"b\")})\n",
+            "\n(1,1,1) = {\"\nab\n\"}\n",
+        ));
+        assert!(errors.is_empty(), "{errors:?}");
+        let left = &spelled.tile_at(Coord::new(1, 1, 1)).unwrap()[0];
+        let right = &spelled.tile_at(Coord::new(2, 1, 1)).unwrap()[0];
+        let hasher = RandomState::new();
+
+        assert_ne!(left, right);
+        assert!(prefabs_equal(left, right));
+        assert_eq!(hasher.hash_one(left), hasher.hash_one(right));
     }
 }

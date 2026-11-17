@@ -218,7 +218,7 @@ impl Session {
         let current = self.state.document(id)?.map.tile_at(coord);
         let old = blame.snapshot.tile_at(coord);
         let changed = match (current, old) {
-            (Some(current), Some(old)) => !dmm::merge::tiles_equal(current, old),
+            (Some(current), Some(old)) => !dmm::tiles_equal(current, old),
             (None, None) => false,
             _ => true,
         };
