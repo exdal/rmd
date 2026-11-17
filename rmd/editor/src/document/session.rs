@@ -213,6 +213,16 @@ impl Session {
         prefabs
     }
 
+    pub fn pin_prefabs(&mut self, id: DocumentId, prefabs: &[Prefab]) {
+        let Some(document) = self.state.document_mut(id) else {
+            return;
+        };
+
+        for prefab in prefabs {
+            document.map.pin(prefab);
+        }
+    }
+
     pub fn map_path(&self) -> Option<&Path> {
         self.state
             .active_document()

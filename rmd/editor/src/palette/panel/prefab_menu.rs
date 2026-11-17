@@ -72,10 +72,11 @@ impl PrefabMenu {
     }
 
     fn generate_directions(&mut self, ui: &Ui, session: &mut Session, index: usize) {
-        let rows = session
-            .direction_variants(&self.rows[index].prefab)
+        let variants = session.direction_variants(&self.rows[index].prefab);
+        session.pin_prefabs(self.document, &variants);
+        let rows = variants
             .into_iter()
-            .filter(|prefab| !self.rows.iter().any(|row| row.prefab == *prefab))
+            .filter(|prefab| !self.rows.iter().any(|row| prefabs_equal(&row.prefab, prefab)))
             .map(|prefab| build_row(ui, session, prefab, self.text_width, self.icon_extent))
             .collect::<Vec<_>>();
         let count = rows.len();

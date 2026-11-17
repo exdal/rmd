@@ -74,7 +74,6 @@ impl PrefabTable {
         self.entry(id).placed
     }
 
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn pin(&mut self, id: PrefabId) {
         self.entry_mut(id).pinned = true;
     }
@@ -84,6 +83,11 @@ impl PrefabTable {
             .iter()
             .filter(|entry| entry.placed > 0 || entry.pinned)
             .map(|entry| &entry.prefab)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn placed_entries(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.placed > 0).count()
     }
 
     fn entry(&self, id: PrefabId) -> &Entry {

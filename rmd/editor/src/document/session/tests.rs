@@ -384,3 +384,25 @@ fn map_prefabs_of_lists_each_placed_prefab_once_and_drops_removed_ones() {
 
     assert_eq!(session.map_prefabs_of(id, &path), [floor]);
 }
+
+#[test]
+fn pinned_prefabs_stay_listed_without_placements_and_are_never_written() {
+    let path = TreePath::parse("/turf/floor");
+    let floor = Prefab::new(path.clone());
+    let mut east = floor.clone();
+    east.set_var("dir".into(), Value::Num(4.0));
+    let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+    let plain = map.intern_tile(vec![floor.clone()]);
+    map.grid[0][0][0] = plain;
+    let mut session = Session::new();
+    let id = session.state.open_document(MapDocument::new(map, 1));
+    session.rebuild_instances(id);
+
+    session.pin_prefabs(id, &[east.clone(), floor.clone()]);
+
+    assert_eq!(session.map_prefabs_of(id, &path), [floor.clone(), east]);
+    let document = session.state.document(id).unwrap();
+    document.map.assert_placement_counts();
+    let written = document.to_map();
+    assert_eq!(written.dictionary.values().collect::<Vec<_>>(), [&vec![floor]]);
+}

@@ -149,6 +149,11 @@ impl Grid {
         })
     }
 
+    pub(crate) fn pin(&mut self, prefab: &Prefab) {
+        let id = self.table.intern(prefab);
+        self.table.pin(id);
+    }
+
     pub fn prefabs_of<'a>(&'a self, path: &'a TreePath) -> impl Iterator<Item = &'a Prefab> + 'a {
         self.table.live().filter(move |prefab| prefab.path == *path)
     }
@@ -513,7 +518,7 @@ impl Grid {
         }
 
         assert_eq!(
-            self.table.live().count(),
+            self.table.placed_entries(),
             counted.len(),
             "a prefab no cell holds counts as placed"
         );
