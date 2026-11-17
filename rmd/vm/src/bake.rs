@@ -33,6 +33,7 @@ pub use crate::{
 
 const CONNECTION_SOURCE: u8 = 1;
 const CONNECTION_TARGET: u8 = 2;
+const CONNECTION_ROUTE: u8 = 4;
 const CONNECTION_ROLES: u8 = CONNECTION_SOURCE | CONNECTION_TARGET;
 
 const APPEARANCE_CACHE_MAX_ENTRIES: usize = 50_000;
@@ -736,6 +737,39 @@ impl Bake {
         connected.dedup();
 
         connected
+    }
+
+    /// Directed edges in the route component containing the selected placement.
+    pub fn route_connections(&self, selected: u64) -> Vec<(u64, u64)> {
+        let mut edges = Vec::new();
+        for (&source, endpoints) in &self.connection_endpoints {
+            for endpoint in endpoints {
+                if endpoint.roles & (CONNECTION_SOURCE | CONNECTION_ROUTE) != (CONNECTION_SOURCE | CONNECTION_ROUTE) {
+                    continue;
+                }
+                if let Some(channel) = self.connection_index.get(&endpoint.channel) {
+                    edges.extend(channel.targets.iter().map(|&target| (source, target)));
+                }
+            }
+        }
+        edges.sort_unstable();
+        edges.dedup();
+        let mut adjacency = HashMap::<u64, Vec<u64>>::new();
+        for &(source, target) in &edges {
+            adjacency.entry(source).or_default().push(target);
+            adjacency.entry(target).or_default().push(source);
+        }
+        let mut visited = HashSet::new();
+        let mut pending = vec![selected];
+        while let Some(node) = pending.pop() {
+            if visited.insert(node)
+                && let Some(neighbors) = adjacency.get(&node)
+            {
+                pending.extend(neighbors.iter().copied());
+            }
+        }
+        edges.retain(|(source, _)| visited.contains(source));
+        edges
     }
 
     pub fn highlights(&self, id: u64) -> &[Highlight] {
@@ -2171,9 +2205,14 @@ impl Runtime {
                         "connections() roles must be numeric associative values".into(),
                     )));
                 };
-                if !roles.is_finite() || roles.fract() != 0.0 || roles < 1.0 || roles > f32::from(CONNECTION_ROLES) {
+                if !roles.is_finite()
+                    || roles.fract() != 0.0
+                    || roles < 1.0
+                    || roles > f32::from(CONNECTION_ROLES | CONNECTION_ROUTE)
+                    || (roles as u8) & CONNECTION_ROLES == 0
+                {
                     return Err(evaluator.fault(FaultKind::InvalidOperation(
-                        "connections() roles must use DEMIR_CONNECTION_SOURCE and DEMIR_CONNECTION_TARGET".into(),
+                        "connections() requires SOURCE or TARGET, optionally combined with ROUTE".into(),
                     )));
                 }
                 *combined.entry(channel.to_owned()).or_default() |= roles as u8;

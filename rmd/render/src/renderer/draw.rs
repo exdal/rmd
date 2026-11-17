@@ -462,6 +462,7 @@ mod tests {
         assert!(!picked.is_animated());
 
         let guides = [GuideLine {
+            solid: false,
             origin: [0.0; 2],
             target: [32.0, 0.0],
         }];

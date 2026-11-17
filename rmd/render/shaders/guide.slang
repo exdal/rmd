@@ -4,6 +4,7 @@ import sprite_shared;
 struct GuideLine {
     f32x2 origin;
     f32x2 target;
+    u32 solid;
 };
 
 [[vk::binding(0, 0)]]
@@ -77,11 +78,11 @@ func fs_main(
     uniform u32 picked_count,
     uniform f32 stripe_offset
 ) -> f32x4 {
-    if (contains_owner(picked_owners, picked_count, owner_at(i32x2(input.position.xy)))) {
+    let guide = guide_lines[input.guide_id];
+    if (guide.solid == 0 && contains_owner(picked_owners, picked_count, owner_at(i32x2(input.position.xy)))) {
         discard;
     }
 
-    let guide = guide_lines[input.guide_id];
     let fragment = input.position.xy;
     let segment = guide.target - guide.origin;
     let segment_length_squared = dot(segment, segment);
@@ -89,7 +90,7 @@ func fs_main(
         discard;
     }
 
-    if (distance(fragment, guide.origin) <= 6.0) {
+    if (guide.solid == 0 && distance(fragment, guide.origin) <= 6.0) {
         return f32x4(1.0, 0.5, 0.0, 1.0);
     }
 
@@ -99,5 +100,5 @@ func fs_main(
         discard;
     }
 
-    return guide_color(along * sqrt(segment_length_squared), stripe_offset);
+    return guide.solid != 0 ? f32x4(0.2, 0.9, 1.0, 1.0) : guide_color(along * sqrt(segment_length_squared), stripe_offset);
 }

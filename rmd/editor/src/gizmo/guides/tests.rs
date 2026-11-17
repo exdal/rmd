@@ -5,6 +5,7 @@ use dmm::{Coord, Map, Prefab, Size};
 use render::GuideLine;
 
 use super::GuideBadge;
+
 use crate::{
     document::{MapDocument, instance::VarMutation},
     session::{
@@ -162,14 +163,17 @@ fn selection_guides_follow_profile_connections_in_both_directions_and_across_lev
     let guides = session.picked_guides();
     assert_eq!(guides.lines.len(), 3, "one offset guide and two connections");
     assert!(guides.lines.contains(&GuideLine {
+        solid: false,
         origin: [16.0, 16.0],
         target: [20.0, 16.0],
     }));
     assert!(guides.lines.contains(&GuideLine {
+        solid: false,
         origin: [20.0, 16.0],
         target: [80.0, 16.0],
     }));
     assert!(guides.lines.contains(&GuideLine {
+        solid: false,
         origin: [20.0, 16.0],
         target: [48.0, 16.0],
     }));
@@ -214,6 +218,7 @@ fn selection_guides_follow_profile_connections_in_both_directions_and_across_lev
     assert_eq!(
         reverse.lines,
         vec![GuideLine {
+            solid: false,
             origin: [80.0, 16.0],
             target: [20.0, 16.0],
         }]

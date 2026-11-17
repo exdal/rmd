@@ -3,7 +3,11 @@ use std::collections::HashSet;
 use dmm::Coord;
 use render::GuideLine;
 
-use crate::{document::PrefabInstanceId, frame::visual, session::Session};
+use crate::{
+    document::{DocumentId, PrefabInstanceId},
+    frame::visual,
+    session::Session,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GuideBadge {
@@ -19,6 +23,47 @@ pub(crate) struct PickGuides {
 }
 
 impl Session {
+    /// Expand a selected route node into its connected collection of guide segments.
+    fn add_route_guides(&self, document_id: DocumentId, selected: PrefabInstanceId, guides: &mut PickGuides) {
+        let Some(document) = self.state.document(document_id) else {
+            return;
+        };
+        let Some(bake) = self.caches.get(&document_id).and_then(|cache| cache.bake.as_ref()) else {
+            return;
+        };
+        let edges = bake.route_connections(selected.get());
+        let edge_set: HashSet<_> = edges.iter().copied().collect();
+        let size = self.options.tile_size.max(1) as f32;
+        let center = |raw| {
+            let id = PrefabInstanceId::from_raw(raw)?;
+            let coord = document.instance_location(id)?.coord;
+            (coord.z == document.z).then_some([(coord.x as f32 - 0.5) * size, (coord.y as f32 - 0.5) * size])
+        };
+        for (source, target) in edges {
+            let (Some(origin), Some(destination)) = (center(source), center(target)) else {
+                continue;
+            };
+            guides.lines.retain(|line| {
+                !((line.origin == origin && line.target == destination)
+                    || (line.origin == destination && line.target == origin))
+            });
+            guides.lines.extend(route_segments(
+                origin,
+                destination,
+                size,
+                edge_set.contains(&(target, source)),
+            ));
+            for raw in [source, target] {
+                if let Some(id) = PrefabInstanceId::from_raw(raw)
+                    && id != selected
+                    && !guides.connected.contains(&id)
+                {
+                    guides.connected.push(id);
+                }
+            }
+        }
+    }
+
     pub(crate) fn picked_offset_guide(&self) -> Option<GuideLine> {
         let environment = self.state.environment.as_ref()?;
         let document = self.state.active_document()?;
@@ -50,6 +95,7 @@ impl Session {
         let tile_size = self.options.tile_size.max(1) as f32;
 
         Some(GuideLine {
+            solid: false,
             origin: [
                 (location.coord.x as f32 - 0.5) * tile_size,
                 (location.coord.y as f32 - 0.5) * tile_size,
@@ -109,6 +155,7 @@ impl Session {
             };
             let target = center(connected, location.coord);
             guides.lines.push(GuideLine {
+                solid: false,
                 origin: pick_center,
                 target,
             });
@@ -122,8 +169,58 @@ impl Session {
             }
         }
 
+        self.add_route_guides(document_id, picked, &mut guides);
         guides
     }
+}
+
+fn route_segments(mut origin: [f32; 2], mut target: [f32; 2], size: f32, reciprocal: bool) -> Vec<GuideLine> {
+    let mut lines = Vec::new();
+    if origin == target {
+        let points = [
+            origin,
+            [origin[0] + size * 0.4, origin[1]],
+            [origin[0] + size * 0.4, origin[1] + size * 0.4],
+            [origin[0], origin[1] + size * 0.4],
+        ];
+        for pair in points.windows(2) {
+            lines.push(GuideLine {
+                solid: true,
+                origin: pair[0],
+                target: pair[1],
+            });
+        }
+        origin = points[3];
+    }
+    let delta = [target[0] - origin[0], target[1] - origin[1]];
+    let length = delta[0].hypot(delta[1]);
+    let tangent = [delta[0] / length, delta[1] / length];
+    let normal = [-tangent[1], tangent[0]];
+    if reciprocal && lines.is_empty() {
+        for axis in 0..2 {
+            origin[axis] += normal[axis] * size * 0.08;
+            target[axis] += normal[axis] * size * 0.08;
+        }
+    }
+    lines.push(GuideLine {
+        solid: true,
+        origin,
+        target,
+    });
+    // Arrowheads at the middle remain visible when a beacon sprite covers its tile center.
+    let tip = [(origin[0] + target[0]) * 0.5, (origin[1] + target[1]) * 0.5];
+    let arrow = (size * 0.22).min(length * 0.25);
+    for side in [-1.0, 1.0] {
+        lines.push(GuideLine {
+            solid: true,
+            origin: [
+                tip[0] - tangent[0] * arrow + normal[0] * arrow * side * 0.6,
+                tip[1] - tangent[1] * arrow + normal[1] * arrow * side * 0.6,
+            ],
+            target: tip,
+        });
+    }
+    lines
 }
 
 #[cfg(test)]

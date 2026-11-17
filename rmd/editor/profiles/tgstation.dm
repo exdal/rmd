@@ -826,6 +826,22 @@
 /obj/machinery/door/airlock/demir_connections()
 	return demir_connection("airlock", id_tag, DEMIR_CONNECTION_TARGET)
 
+/obj/machinery/navbeacon/demir_connections()
+	set_codes()
+	var/list/connections = list()
+	if(!codes[NAVBEACON_PATROL_MODE])
+		return connections
+	var/target_channel = get_connection_key("bot-patrol:[z]", location)
+	connections[target_channel] = DEMIR_CONNECTION_TARGET
+	var/next_location = codes[NAVBEACON_PATROL_NEXT]
+	if(next_location)
+		var/source_channel = get_connection_key("bot-patrol:[z]", next_location)
+		var/roles = connections[source_channel]
+		if(isnull(roles))
+			roles = 0
+		connections[source_channel] = roles | DEMIR_CONNECTION_SOURCE | DEMIR_CONNECTION_ROUTE
+	return connections
+
 /datum/demir/tgstation/connections(atom/target)
 	return target.demir_connections()
 

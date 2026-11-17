@@ -13,6 +13,7 @@ use crate::{Frame, GpuError};
 pub(super) struct GpuGuideLine {
     origin: [f32; 2],
     target: [f32; 2],
+    solid: u32,
 }
 
 #[repr(C)]
@@ -57,7 +58,11 @@ impl Renderer {
                     .filter(|guide| finite(&guide.origin, &guide.target))
                     .map(|guide| {
                         let (origin, target) = project_guide_line(guide, view.camera, view.rect);
-                        GpuGuideLine { origin, target }
+                        GpuGuideLine {
+                            origin,
+                            target,
+                            solid: u32::from(guide.solid),
+                        }
                     })
                     .filter(|guide| finite(&guide.origin, &guide.target))
                     .take(u32::MAX as usize)
@@ -157,6 +162,7 @@ mod tests {
     #[test]
     fn guide_lines_project_into_map_view_coordinates() {
         let guide = GuideLine {
+            solid: false,
             origin: [110.0, 40.0],
             target: [130.0, 60.0],
         };

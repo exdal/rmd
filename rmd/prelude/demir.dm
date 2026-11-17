@@ -63,6 +63,8 @@
 
 #define DEMIR_CONNECTION_SOURCE 1
 #define DEMIR_CONNECTION_TARGET 2
+// Add to SOURCE to expand selection guides to the entire connected route..
+#define DEMIR_CONNECTION_ROUTE 4
 
 #define DEMIR_HIGHLIGHT_SELECTED 1
 #define DEMIR_HIGHLIGHT_HOVERED 2

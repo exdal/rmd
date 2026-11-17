@@ -43,6 +43,8 @@ pub struct PlacementFlash {
 /// A map-space guide segment rendered over a map view.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GuideLine {
+    /// Whether we use a solid line with no ending markers.
+    pub solid: bool,
     pub origin: [f32; 2],
     pub target: [f32; 2],
 }
