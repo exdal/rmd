@@ -15,7 +15,7 @@ impl MapDocument {
     pub fn resize(&mut self, width: u32, height: u32, fill: &[Prefab]) -> bool {
         let size = self.map.size();
         let (old_width, old_height) = (size.x, size.y);
-        if width == 0 || height == 0 || (width, height) == (old_width, old_height) {
+        if self.is_stash() || width == 0 || height == 0 || (width, height) == (old_width, old_height) {
             return false;
         }
 
@@ -51,7 +51,7 @@ impl MapDocument {
     }
 
     pub fn append_level(&mut self, tile: &[Prefab]) -> Option<u32> {
-        if self.read_only {
+        if self.refuses_history() {
             return None;
         }
 
@@ -66,7 +66,7 @@ impl MapDocument {
     }
 
     pub fn insert_requested_level(&mut self, z: u32, cells: LevelCells) -> bool {
-        if self.read_only {
+        if self.refuses_history() {
             return false;
         }
 
@@ -81,7 +81,7 @@ impl MapDocument {
     }
 
     pub fn insert_remote_level(&mut self, z: u32, cells: LevelCells) -> bool {
-        if self.read_only {
+        if self.refuses_history() {
             return false;
         }
 
@@ -107,7 +107,7 @@ impl MapDocument {
 
     // our own level undo, back from the server like a peer's change would be
     pub fn undo_requested_level(&mut self, change: LevelChange) -> bool {
-        if self.read_only {
+        if self.refuses_history() {
             return false;
         }
 
@@ -128,7 +128,7 @@ impl MapDocument {
     }
 
     pub fn redo_requested_level(&mut self, change: LevelChange) -> bool {
-        if self.read_only {
+        if self.refuses_history() {
             return false;
         }
 
@@ -174,7 +174,7 @@ impl MapDocument {
     }
 
     pub fn delete_level(&mut self, z: u32) -> bool {
-        if self.read_only {
+        if self.refuses_history() {
             return false;
         }
 
@@ -182,7 +182,7 @@ impl MapDocument {
     }
 
     pub fn delete_requested_level(&mut self, z: u32) -> bool {
-        if self.read_only {
+        if self.refuses_history() {
             return false;
         }
 
@@ -200,7 +200,7 @@ impl MapDocument {
     }
 
     pub fn delete_remote_level(&mut self, z: u32) -> bool {
-        if self.read_only {
+        if self.refuses_history() {
             return false;
         }
 

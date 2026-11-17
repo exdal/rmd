@@ -27,7 +27,7 @@ use super::{
     context::side_row,
     fixtures::{build, build_with_options, update_prefab, update_prefabs, update_prefabs_with_options},
     instance_for,
-    options::{FrameRenderOptions, TypeVisibility},
+    options::{FrameRenderOptions, HiddenTypes, TypeVisibility},
     pages::assert_pages_hold,
 };
 use crate::{
@@ -52,6 +52,26 @@ fn appearance(color: Option<&str>, alpha: u8) -> Appearance {
         alpha,
         ..Default::default()
     }
+}
+
+#[test]
+fn hidden_types_union_merges_paths_and_areas() {
+    let area = |name: &str| Arc::new(HashSet::from([TreePath::parse(name).segments]));
+    let left = [TreePath::parse("/obj")]
+        .into_iter()
+        .collect::<HiddenTypes>()
+        .with_areas(area("/area/a"));
+    let right = [TreePath::parse("/mob")].into_iter().collect::<HiddenTypes>();
+
+    let merged = left.union(&right);
+    assert!(merged.hides(&Prefab::new(TreePath::parse("/obj"))));
+    assert!(merged.hides(&Prefab::new(TreePath::parse("/mob"))));
+    assert!(merged.hides(&Prefab::new(TreePath::parse("/area/a"))));
+
+    let both = left.union(&HiddenTypes::default().with_areas(area("/area/b")));
+    assert!(both.hides(&Prefab::new(TreePath::parse("/area/a"))));
+    assert!(both.hides(&Prefab::new(TreePath::parse("/area/b"))));
+    assert!(HiddenTypes::default().union(&HiddenTypes::default()).is_empty());
 }
 
 #[test]

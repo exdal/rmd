@@ -31,6 +31,7 @@ mod region;
 mod search;
 mod session;
 mod settings;
+mod stash;
 #[cfg(test)]
 mod testing;
 mod tool;

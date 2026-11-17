@@ -86,6 +86,12 @@ impl Default for DocumentId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentKind {
+    Map,
+    Stash,
+}
+
 pub struct MapDocument {
     id: DocumentId,
     pub path: Option<PathBuf>,
@@ -103,6 +109,7 @@ pub struct MapDocument {
     selection_mode: RegionSelectionMode,
     focus: Option<AreaFocus>,
     generation: u64,
+    kind: DocumentKind,
     journal: Option<Journal>,
     read_only: bool,
     preview_covered: Arc<HashSet<Coord>>,
@@ -150,6 +157,7 @@ impl MapDocument {
             selection_mode: RegionSelectionMode::Full,
             focus: None,
             generation: 0,
+            kind: DocumentKind::Map,
             journal: None,
             read_only: false,
             preview_covered: Arc::default(),
@@ -167,6 +175,29 @@ impl MapDocument {
 
     pub fn is_read_only(&self) -> bool {
         self.read_only
+    }
+
+    pub fn is_stash(&self) -> bool {
+        self.kind == DocumentKind::Stash
+    }
+
+    fn refuses_history(&self) -> bool {
+        self.read_only || self.is_stash()
+    }
+
+    pub(crate) fn stash(map: Map) -> Self {
+        Self {
+            kind: DocumentKind::Stash,
+            ..Self::new(map, 1)
+        }
+    }
+
+    pub(crate) fn replace_grid(&mut self, grid: Grid) {
+        self.map = grid;
+        self.generation += 1;
+        self.selection = None;
+        self.picked.clear();
+        self.z = 1;
     }
 
     pub fn is_journaling(&self) -> bool {
@@ -275,6 +306,7 @@ impl MapDocument {
             resolved_path: self.resolved_path.take(),
             pending_write,
             generation: self.generation + 1,
+            kind: self.kind,
             ..Self::new(map, z)
         };
 
@@ -645,7 +677,7 @@ impl MapDocument {
     }
 
     pub fn allows_edit_at(&self, coord: Coord) -> bool {
-        !self.read_only && self.is_within_focus(coord) && !self.preview_covered.contains(&coord)
+        !self.refuses_history() && self.is_within_focus(coord) && !self.preview_covered.contains(&coord)
     }
 
     pub fn allows_select_at(&self, coord: Coord) -> bool {
@@ -657,7 +689,7 @@ impl MapDocument {
             return false;
         };
 
-        !self.read_only
+        !self.refuses_history()
             && self.is_within_focus(location.coord)
             && (self.preview_exempt.contains(&id) || !self.preview_covered.contains(&location.coord))
     }
@@ -676,7 +708,7 @@ impl MapDocument {
     }
 
     pub fn apply_grouped(&mut self, edit: Edit, group: Option<EditGroupId>) -> bool {
-        if self.read_only
+        if self.refuses_history()
             || (!edit.is_structural() && edit.changes.iter().any(|change| !self.is_within_focus(change.coord)))
         {
             return false;
@@ -709,7 +741,7 @@ impl MapDocument {
     }
 
     fn step_history(&mut self, step_kind: StepKind) -> Option<Vec<PrefabInstanceId>> {
-        if self.read_only {
+        if self.refuses_history() {
             return None;
         }
 

@@ -5,6 +5,7 @@ use crate::{
     document::{DocumentId, MapDocument},
     environment::Environment,
     maploader::resolved_path,
+    stash::Stash,
     tool::Tool,
 };
 
@@ -18,6 +19,7 @@ pub struct EditorState {
     pub palette: Option<dmm::Prefab>,
     recent_prefabs: Vec<dmm::Prefab>,
     clipboard: Option<TileRegion>,
+    stash: Stash,
 }
 
 impl Default for EditorState {
@@ -36,6 +38,7 @@ impl EditorState {
             palette: None,
             recent_prefabs: Vec::new(),
             clipboard: None,
+            stash: Stash::new(),
         }
     }
 
@@ -51,11 +54,31 @@ impl EditorState {
         self.documents.is_empty()
     }
 
+    pub fn stash(&self) -> &Stash {
+        &self.stash
+    }
+
+    pub fn stash_mut(&mut self) -> &mut Stash {
+        &mut self.stash
+    }
+
+    pub fn stash_id(&self) -> DocumentId {
+        self.stash.id()
+    }
+
     pub fn document(&self, id: DocumentId) -> Option<&MapDocument> {
+        if id == self.stash.id() {
+            return Some(self.stash.document());
+        }
+
         self.documents.iter().find(|document| document.id() == id)
     }
 
     pub fn document_mut(&mut self, id: DocumentId) -> Option<&mut MapDocument> {
+        if id == self.stash.id() {
+            return Some(self.stash.document_mut());
+        }
+
         self.documents.iter_mut().find(|document| document.id() == id)
     }
 
@@ -120,10 +143,17 @@ impl EditorState {
 
     pub fn pair_mut(&mut self, id: DocumentId) -> Option<(&Environment, &mut MapDocument)> {
         let Self {
-            environment, documents, ..
+            environment,
+            documents,
+            stash,
+            ..
         } = self;
         let environment = environment.as_ref()?;
-        let document = documents.iter_mut().find(|document| document.id() == id)?;
+        let document = if id == stash.id() {
+            stash.document_mut()
+        } else {
+            documents.iter_mut().find(|document| document.id() == id)?
+        };
 
         Some((environment, document))
     }
@@ -188,6 +218,7 @@ mod tests {
     use std::path::Path;
 
     use super::{EditorState, RECENT_PREFAB_CAPACITY};
+    use crate::document::MapDocument;
 
     fn document(path: &str) -> crate::document::MapDocument {
         crate::document::MapDocument::open(path, dmm::Map::new(dmm::Size { x: 1, y: 1, z: 1 }), 1)
@@ -263,6 +294,33 @@ mod tests {
 
         state.close_document(dirty);
         assert!(!state.has_unsaved_changes());
+    }
+
+    #[test]
+    fn the_stash_is_a_document_that_is_not_listed() {
+        let mut state = EditorState::new();
+        let stash_id = state.stash_id();
+
+        assert!(state.document(stash_id).is_some_and(MapDocument::is_stash));
+        assert!(state.is_empty());
+        assert!(state.document_ids().is_empty());
+
+        state.set_active(stash_id);
+        assert_eq!(state.active(), Some(stash_id));
+        assert!(state.active_document().is_some());
+
+        let map_id = state.open_document(MapDocument::new(dmm::Map::new(dmm::Size { x: 1, y: 1, z: 1 }), 1));
+        assert_eq!(state.document_ids(), vec![map_id]);
+        assert!(state.close_document(stash_id).is_none());
+        assert!(state.document(stash_id).is_some());
+
+        state.set_active(stash_id);
+        assert!(state.close_document(map_id).is_some());
+        assert_eq!(state.active(), Some(stash_id));
+        assert!(!state.has_unsaved_changes());
+
+        state.set_active(map_id);
+        assert_eq!(state.active(), Some(stash_id));
     }
 
     #[test]

@@ -76,6 +76,19 @@ impl HiddenTypes {
         }
     }
 
+    pub fn union(&self, other: &Self) -> Self {
+        let areas = match (&self.areas, &other.areas) {
+            (Some(a), Some(b)) => Some(Arc::new(a.union(b).cloned().collect())),
+            (Some(areas), None) | (None, Some(areas)) => Some(Arc::clone(areas)),
+            (None, None) => None,
+        };
+
+        Self {
+            paths: self.paths.union(&other.paths).cloned().collect(),
+            areas,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.paths.is_empty() && self.areas.as_ref().is_none_or(|areas| areas.is_empty())
     }

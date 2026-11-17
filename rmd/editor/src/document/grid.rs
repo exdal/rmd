@@ -90,6 +90,27 @@ impl Grid {
         grid
     }
 
+    pub(crate) fn from_level_tiles(width: u32, height: u32, tiles: Vec<Tile>) -> Self {
+        let mut grid = Self {
+            size: Size {
+                x: width,
+                y: height,
+                z: 0,
+            },
+            cells: Vec::new(),
+            locations: HashMap::new(),
+            next_id: 1,
+        };
+
+        let level = grid.level_from_tiles(tiles);
+        assert!(
+            grid.insert_level(1, &level),
+            "tiles do not fill a {width}x{height} level"
+        );
+
+        grid
+    }
+
     pub fn size(&self) -> Size {
         self.size
     }
