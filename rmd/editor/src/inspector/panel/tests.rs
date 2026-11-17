@@ -9,10 +9,13 @@ use dmi::metadata::Dir;
 use dmm::{Coord, Prefab, parser::parse_value, writer::format_value};
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarDecl, VarTypeKind};
 
-use crate::{document::command::EditGroupId, gizmo::direction::DirectionalTypes};
+use crate::{
+    document::command::EditGroupId,
+    gizmo::direction::{DirectionalTypes, direction_choices},
+};
 
 use super::{
-    direction::{direction_choices, selected_direction},
+    direction::selected_direction,
     property::{commit_int_property, format_color},
     snapshot::{
         InspectorVariable, VariableGroup, inspector_snapshot, inspector_variables, list_entry_drafts,

@@ -5,6 +5,7 @@ use base::{
 };
 
 use dmi::metadata::Dir;
+use dmm::Prefab;
 use objtree::{ObjectTree, TypeId};
 
 use crate::{
@@ -53,6 +54,20 @@ pub(crate) fn direction_state(
         declared,
         directional_types: directional_types_for(&environment.tree, id),
     }
+}
+
+pub(crate) fn direction_choices(
+    count: usize, declared: Option<[bool; 8]>, directional_types: Option<DirectionalTypes>,
+) -> Vec<Dir> {
+    if let Some(supported) = directional_types.map(|types| types.supported).or(declared) {
+        return Dir::ORDER
+            .into_iter()
+            .zip(supported)
+            .filter_map(|(direction, supported)| supported.then_some(direction))
+            .collect();
+    }
+
+    Dir::ORDER.into_iter().take(count).collect()
 }
 
 fn directional_types_for(tree: &ObjectTree, selected: TypeId) -> Option<DirectionalTypes> {
@@ -220,6 +235,32 @@ impl Session {
         }
 
         Some(self.state.replace_palette(prefab))
+    }
+
+    pub(crate) fn direction_variants(&self, prefab: &Prefab) -> Vec<Prefab> {
+        let Some(environment) = self.state.environment.as_ref() else {
+            return Vec::new();
+        };
+
+        let Some(id) = environment.tree.id_of(&prefab.path) else {
+            return Vec::new();
+        };
+
+        let appearance = visual::resolve_id(&environment.tree, id, prefab);
+        let state = direction_state(environment, id, &appearance, self.declared_directions(&prefab.path));
+        if state.directional_types.is_some() {
+            return Vec::new();
+        }
+
+        let count = state.dmi_directions.unwrap_or(1) as usize;
+        direction_choices(count, state.declared, None)
+            .into_iter()
+            .map(|direction| {
+                let mut variant = prefab.clone();
+                variant.set_var(Identifier::from(vars::DIR), Value::Num(direction.to_bits() as f32));
+                variant
+            })
+            .collect()
     }
 }
 

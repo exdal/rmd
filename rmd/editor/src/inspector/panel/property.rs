@@ -10,14 +10,14 @@ use ui::{color::byte, widgets::text_wrapped_colored};
 
 use crate::{
     document::{command::EditGroupId, instance::VarMutation},
-    gizmo::transform::anchor_axis,
+    gizmo::{direction::direction_choices, transform::anchor_axis},
     inspector::session::EditScope,
     session::Session,
 };
 
 use super::{
     ADVANCED_OFFSETS, DISPLAY_ROWS, IDENTICAL_EDIT_COLOR, TransformMode,
-    direction::{direction_choices, direction_label, selected_direction},
+    direction::{direction_label, selected_direction},
     snapshot::{InspectorProperty, InspectorSnapshot, display_source},
     state::{InspectorState, TypedDraft, VariableDraft, drag_group, end_drag},
 };

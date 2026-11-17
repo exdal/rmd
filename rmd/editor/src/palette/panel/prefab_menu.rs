@@ -22,6 +22,7 @@ const EMPTY_TEXT: &str = "No instances in this map";
 enum RowAction<'a> {
     Choose(&'a Prefab),
     Search(&'a Prefab, SimilarMatchKind),
+    GenerateDirections(usize),
 }
 
 struct Row {
@@ -53,27 +54,10 @@ impl PrefabMenu {
             - 1.0
             - style.scrollbar_size())
         .max(1.0);
-        let spacing_y = style.item_spacing()[1];
         let rows = session
             .map_prefabs_of(document, &brush.path)
             .into_iter()
-            .map(|prefab| {
-                let path = prefab.path.to_string();
-                let overrides = override_lines(&prefab);
-                let text_height = iter::once(&path)
-                    .chain(&overrides)
-                    .map(|line| ui.calc_text_size_with_opts(line, false, text_width)[1] + spacing_y)
-                    .sum::<f32>()
-                    - spacing_y;
-
-                Row {
-                    placement: session.prefab_placement(&prefab),
-                    path,
-                    overrides,
-                    height: icon_extent.max(text_height),
-                    prefab,
-                }
-            })
+            .map(|prefab| build_row(ui, session, prefab, text_width, icon_extent))
             .collect::<Vec<_>>();
         let selected = rows.iter().position(|row| row.prefab == brush);
 
@@ -85,6 +69,43 @@ impl PrefabMenu {
             rows,
             selected,
         })
+    }
+
+    fn generate_directions(&mut self, ui: &Ui, session: &mut Session, index: usize) {
+        let rows = session
+            .direction_variants(&self.rows[index].prefab)
+            .into_iter()
+            .filter(|prefab| !self.rows.iter().any(|row| row.prefab == *prefab))
+            .map(|prefab| build_row(ui, session, prefab, self.text_width, self.icon_extent))
+            .collect::<Vec<_>>();
+        let count = rows.len();
+
+        self.rows.splice(index + 1..index + 1, rows);
+
+        if let Some(selected) = &mut self.selected
+            && *selected > index
+        {
+            *selected += count;
+        }
+    }
+}
+
+fn build_row(ui: &Ui, session: &mut Session, prefab: Prefab, text_width: f32, icon_extent: f32) -> Row {
+    let spacing_y = ui.clone_style().item_spacing()[1];
+    let path = prefab.path.to_string();
+    let overrides = override_lines(&prefab);
+    let text_height = iter::once(&path)
+        .chain(&overrides)
+        .map(|line| ui.calc_text_size_with_opts(line, false, text_width)[1] + spacing_y)
+        .sum::<f32>()
+        - spacing_y;
+
+    Row {
+        placement: session.prefab_placement(&prefab),
+        path,
+        overrides,
+        height: icon_extent.max(text_height),
+        prefab,
     }
 }
 
@@ -113,7 +134,7 @@ pub(crate) fn update_prefab_menu(
         return;
     }
 
-    let Some(open) = menu.as_ref() else {
+    let Some(open) = menu.as_mut() else {
         return;
     };
 
@@ -141,6 +162,7 @@ pub(crate) fn update_prefab_menu(
             find.open_for_prefab(session, open.document, prefab, kind);
             ui.close_current_popup();
         },
+        Some(RowAction::GenerateDirections(index)) => open.generate_directions(ui, session, index),
         None => {},
     }
 }
@@ -175,6 +197,11 @@ fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<RowAction<'a>> {
 
             if ui.menu_item("Search by Prefab ID") {
                 action = Some(RowAction::Search(&row.prefab, SimilarMatchKind::Prefab));
+            }
+
+            ui.separator();
+            if ui.menu_item("Generate Directions") {
+                action = Some(RowAction::GenerateDirections(index));
             }
         }
 

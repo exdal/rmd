@@ -5,7 +5,7 @@ use base::{
 };
 use std::sync::Arc;
 
-use dmi::metadata::Dir;
+use dmi::metadata::{Dir, IconState, Metadata};
 use dmm::Prefab;
 use objtree::ObjectTree;
 
@@ -167,4 +167,65 @@ fn facing_several_picks_changes_the_path_of_directional_types_and_the_dir_of_the
         document.prefab_instance(ids[1]).unwrap().prefab().var(&"dir".into()),
         None
     );
+}
+
+fn four_direction_session(paths: &[&str]) -> Session {
+    let mut tree = ObjectTree::new();
+    for path in paths {
+        tree.register(&TreePath::parse(path), Location::default());
+    }
+    let mut environment = Environment::new(".", tree);
+    environment.icons.insert(
+        String::from("four.dmi"),
+        Metadata {
+            states: vec![IconState {
+                name: String::from("four"),
+                dirs: 4,
+                frames: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    );
+    let mut session = Session::new();
+    session.state.environment = Some(Arc::new(environment));
+
+    session
+}
+
+fn four_direction_prefab(path: &str) -> Prefab {
+    let mut prefab = Prefab::new(TreePath::parse(path));
+    prefab.set_var("icon".into(), Value::Resource(String::from("four.dmi")));
+    prefab.set_var("icon_state".into(), Value::Text(String::from("four")));
+
+    prefab
+}
+
+fn facing(prefab: &Prefab, direction: Dir) -> Prefab {
+    let mut variant = prefab.clone();
+    variant.set_var("dir".into(), Value::Num(direction.to_bits() as f32));
+
+    variant
+}
+
+#[test]
+fn direction_variants_follow_the_icon_state_direction_count() {
+    let session = four_direction_session(&["/obj/sign"]);
+    let prefab = four_direction_prefab("/obj/sign");
+
+    assert_eq!(
+        session.direction_variants(&prefab),
+        Dir::ORDER[..4]
+            .iter()
+            .map(|direction| facing(&prefab, *direction))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn directional_map_helpers_have_no_direction_variants() {
+    let session = four_direction_session(&["/obj/alarm/directional/north", "/obj/alarm/directional/east"]);
+    let prefab = four_direction_prefab("/obj/alarm/directional/north");
+
+    assert!(session.direction_variants(&prefab).is_empty());
 }
