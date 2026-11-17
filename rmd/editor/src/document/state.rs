@@ -38,7 +38,7 @@ impl EditorState {
             palette: None,
             recent_prefabs: Vec::new(),
             clipboard: None,
-            stash: Stash::new(),
+            stash: Stash::default(),
         }
     }
 
@@ -62,24 +62,30 @@ impl EditorState {
         &mut self.stash
     }
 
-    pub fn stash_id(&self) -> DocumentId {
-        self.stash.id()
+    pub fn remove_stash_entry(&mut self, id: DocumentId) -> bool {
+        if !self.stash.remove(id) {
+            return false;
+        }
+
+        if self.active == Some(id) {
+            self.active = self.documents.first().map(MapDocument::id);
+        }
+
+        true
     }
 
     pub fn document(&self, id: DocumentId) -> Option<&MapDocument> {
-        if id == self.stash.id() {
-            return Some(self.stash.document());
-        }
-
-        self.documents.iter().find(|document| document.id() == id)
+        self.documents
+            .iter()
+            .find(|document| document.id() == id)
+            .or_else(|| self.stash.document(id))
     }
 
     pub fn document_mut(&mut self, id: DocumentId) -> Option<&mut MapDocument> {
-        if id == self.stash.id() {
-            return Some(self.stash.document_mut());
-        }
-
-        self.documents.iter_mut().find(|document| document.id() == id)
+        self.documents
+            .iter_mut()
+            .find(|document| document.id() == id)
+            .or_else(|| self.stash.document_mut(id))
     }
 
     pub fn document_for_path(&self, path: &Path) -> Option<DocumentId> {
@@ -149,11 +155,10 @@ impl EditorState {
             ..
         } = self;
         let environment = environment.as_ref()?;
-        let document = if id == stash.id() {
-            stash.document_mut()
-        } else {
-            documents.iter_mut().find(|document| document.id() == id)?
-        };
+        let document = documents
+            .iter_mut()
+            .find(|document| document.id() == id)
+            .or_else(|| stash.document_mut(id))?;
 
         Some((environment, document))
     }
@@ -218,7 +223,31 @@ mod tests {
     use std::path::Path;
 
     use super::{EditorState, RECENT_PREFAB_CAPACITY};
-    use crate::document::MapDocument;
+    use crate::{
+        clipboard::{TileRegion, copy_region},
+        document::{MapDocument, selection::Selection},
+        frame::options::HiddenTypes,
+        tool::RegionSelectionMode,
+    };
+
+    fn region() -> TileRegion {
+        let mut map = dmm::Map::new(dmm::Size { x: 2, y: 2, z: 1 });
+        let key = map.intern_tile(vec![dmm::Prefab::new(TreePath::parse("/turf/open/floor"))]);
+        for row in &mut map.grid[0] {
+            row.fill(key);
+        }
+
+        let document = MapDocument::new(map, 1);
+        let selection = Selection::from_drag(dmm::Coord::new(1, 1, 1), dmm::Coord::new(2, 2, 1));
+
+        copy_region(
+            (&document.map).into(),
+            selection,
+            RegionSelectionMode::Full,
+            HiddenTypes::default(),
+        )
+        .unwrap()
+    }
 
     fn document(path: &str) -> crate::document::MapDocument {
         crate::document::MapDocument::open(path, dmm::Map::new(dmm::Size { x: 1, y: 1, z: 1 }), 1)
@@ -297,30 +326,22 @@ mod tests {
     }
 
     #[test]
-    fn the_stash_is_a_document_that_is_not_listed() {
+    fn stash_entries_are_documents_that_are_not_listed() {
         let mut state = EditorState::new();
-        let stash_id = state.stash_id();
-
-        assert!(state.document(stash_id).is_some_and(MapDocument::is_stash));
-        assert!(state.is_empty());
-        assert!(state.document_ids().is_empty());
-
-        state.set_active(stash_id);
-        assert_eq!(state.active(), Some(stash_id));
-        assert!(state.active_document().is_some());
-
         let map_id = state.open_document(MapDocument::new(dmm::Map::new(dmm::Size { x: 1, y: 1, z: 1 }), 1));
+        let entry = state.stash_mut().push(region());
+
+        assert!(state.document(entry).is_some_and(MapDocument::is_stash));
         assert_eq!(state.document_ids(), vec![map_id]);
-        assert!(state.close_document(stash_id).is_none());
-        assert!(state.document(stash_id).is_some());
+        assert!(state.close_document(entry).is_none());
+        assert!(state.document(entry).is_some());
 
-        state.set_active(stash_id);
-        assert!(state.close_document(map_id).is_some());
-        assert_eq!(state.active(), Some(stash_id));
-        assert!(!state.has_unsaved_changes());
-
-        state.set_active(map_id);
-        assert_eq!(state.active(), Some(stash_id));
+        state.set_active(entry);
+        assert_eq!(state.active(), Some(entry));
+        assert!(state.remove_stash_entry(entry));
+        assert!(!state.remove_stash_entry(entry));
+        assert_eq!(state.active(), Some(map_id));
+        assert!(state.document(entry).is_none());
     }
 
     #[test]

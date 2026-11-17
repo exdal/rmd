@@ -8,7 +8,7 @@ use crate::{
         self, BakeUpdate,
         worker::{self, Baked, BakedMap, Job},
     },
-    document::{DocumentId, PrefabInstanceId},
+    document::{DocumentId, MapDocument, PrefabInstanceId},
     frame::{self, PrefabUpdate, options::FrameRenderOptions},
     maploader::preview::PREVIEW_ID_START,
 };
@@ -131,7 +131,7 @@ impl Session {
     }
 
     pub(crate) fn rebake_all(&mut self) {
-        for id in self.state.document_ids() {
+        for id in self.rendered_document_ids() {
             self.rebake(id);
         }
     }
@@ -139,11 +139,13 @@ impl Session {
     pub(crate) fn rebake(&mut self, id: DocumentId) {
         // an extension in flight carries the old bake back, which this replaces
         self.baker.invalidate(id);
+        let is_stash = self.state.document(id).is_some_and(MapDocument::is_stash);
         let cache = self.caches.entry(id).or_default();
         cache.bake = None;
         cache.bake_hold = BakeHold::Off;
         cache.unbaked.clear();
         cache.modules.reset();
+        cache.modules.is_blocked = is_stash;
         self.sync_module_guard(id);
         self.collect_bake_diagnostics();
         self.rebuild_instances(id);

@@ -381,6 +381,7 @@ impl Session {
         let document = self
             .state
             .document_mut(id)
+            .filter(|document| !document.is_stash())
             .ok_or_else(|| io::Error::other("no map is open"))?;
 
         match target {

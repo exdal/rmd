@@ -1,82 +1,86 @@
-use dmm::{Coord, Map, Size, Tile};
+pub(crate) mod session;
+
+use dmm::{Coord, Map, Size};
 
 use crate::{
     clipboard::TileRegion,
-    document::{DocumentId, MapDocument, grid::Grid, selection::Selection},
+    document::{DocumentId, MapDocument, selection::Selection},
     frame::options::HiddenTypes,
     tool::SelectionRotation,
 };
 
-const GAP: u32 = 2;
-
 struct StashEntry {
-    region: TileRegion,
-    x: u32,
+    document: MapDocument,
+    hidden: HiddenTypes,
 }
 
 impl StashEntry {
-    fn bounds(&self) -> Selection {
-        Selection {
-            min: Coord::new(self.x, 1, 1),
-            max: Coord::new(self.x + self.region.width() - 1, self.region.height(), 1),
+    fn new(region: TileRegion) -> Self {
+        let (width, height) = (region.width(), region.height());
+        let mut map = Map::new(Size {
+            x: width,
+            y: height,
+            z: 1,
+        });
+
+        let bounds = Selection {
+            min: Coord::new(1, 1, 1),
+            max: Coord::new(width, height, 1),
+        };
+
+        for (coord, tile) in region.destinations(bounds, SelectionRotation::Original) {
+            let key = map.intern_tile(tile.clone());
+            map.grid[0][(height - coord.y) as usize][(coord.x - 1) as usize] = key;
+        }
+
+        Self {
+            document: MapDocument::stash(map),
+            hidden: region.hidden().clone(),
         }
     }
 }
 
+#[derive(Default)]
 pub struct Stash {
-    document: MapDocument,
     entries: Vec<StashEntry>,
 }
 
-impl Default for Stash {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Stash {
-    pub fn new() -> Self {
-        Self {
-            document: MapDocument::stash(Map::new(Size { x: 1, y: 1, z: 1 })),
-            entries: Vec::new(),
-        }
+    pub fn push(&mut self, region: TileRegion) -> DocumentId {
+        let entry = StashEntry::new(region);
+        let id = entry.document.id();
+        self.entries.push(entry);
+
+        id
     }
 
-    pub fn push(&mut self, region: TileRegion) {
-        let x = self.entries.last().map_or(1, |last| last.bounds().max.x + 1 + GAP);
-        self.entries.push(StashEntry { region, x });
-        self.rebuild();
-    }
-
-    pub fn remove_at(&mut self, coord: Coord) -> bool {
-        let Some(index) = self.entries.iter().position(|entry| entry.bounds().contains(coord)) else {
+    pub fn remove(&mut self, id: DocumentId) -> bool {
+        let Some(index) = self.entries.iter().position(|entry| entry.document.id() == id) else {
             return false;
         };
 
         self.entries.remove(index);
-        self.repack();
-        self.rebuild();
 
         true
     }
 
-    pub fn clear(&mut self) {
-        self.entries.clear();
-        self.rebuild();
+    pub fn ids(&self) -> Vec<DocumentId> {
+        self.entries.iter().map(|entry| entry.document.id()).collect()
     }
 
-    pub fn entry_bounds(&self, coord: Coord) -> Option<Selection> {
-        self.entries
-            .iter()
-            .map(StashEntry::bounds)
-            .find(|bounds| bounds.contains(coord))
+    pub fn document(&self, id: DocumentId) -> Option<&MapDocument> {
+        self.entry(id).map(|entry| &entry.document)
     }
 
-    pub fn entry_hidden(&self, coord: Coord) -> Option<&HiddenTypes> {
+    pub fn document_mut(&mut self, id: DocumentId) -> Option<&mut MapDocument> {
         self.entries
-            .iter()
-            .find(|entry| entry.bounds().contains(coord))
-            .map(|entry| entry.region.hidden())
+            .iter_mut()
+            .find(|entry| entry.document.id() == id)
+            .map(|entry| &mut entry.document)
+    }
+
+    pub fn hidden(&self, id: DocumentId) -> Option<&HiddenTypes> {
+        self.entry(id).map(|entry| &entry.hidden)
     }
 
     pub fn len(&self) -> usize {
@@ -87,44 +91,8 @@ impl Stash {
         self.entries.is_empty()
     }
 
-    pub fn id(&self) -> DocumentId {
-        self.document.id()
-    }
-
-    pub fn document(&self) -> &MapDocument {
-        &self.document
-    }
-
-    pub fn document_mut(&mut self) -> &mut MapDocument {
-        &mut self.document
-    }
-
-    fn repack(&mut self) {
-        let mut x = 1;
-        for entry in &mut self.entries {
-            entry.x = x;
-            x += entry.region.width() + GAP;
-        }
-    }
-
-    fn rebuild(&mut self) {
-        let width = self.entries.last().map_or(1, |last| last.bounds().max.x);
-        let height = self
-            .entries
-            .iter()
-            .map(|entry| entry.region.height())
-            .max()
-            .unwrap_or(1);
-        let mut tiles = vec![Tile::new(); width as usize * height as usize];
-
-        for entry in &self.entries {
-            let destinations = entry.region.destinations(entry.bounds(), SelectionRotation::Original);
-            for (coord, tile) in destinations {
-                tiles[((coord.y - 1) * width + coord.x - 1) as usize] = tile.clone();
-            }
-        }
-
-        self.document.replace_grid(Grid::from_level_tiles(width, height, tiles));
+    fn entry(&self, id: DocumentId) -> Option<&StashEntry> {
+        self.entries.iter().find(|entry| entry.document.id() == id)
     }
 }
 

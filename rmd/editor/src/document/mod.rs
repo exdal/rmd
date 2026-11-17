@@ -192,14 +192,6 @@ impl MapDocument {
         }
     }
 
-    pub(crate) fn replace_grid(&mut self, grid: Grid) {
-        self.map = grid;
-        self.generation += 1;
-        self.selection = None;
-        self.picked.clear();
-        self.z = 1;
-    }
-
     pub fn is_journaling(&self) -> bool {
         self.journal.is_some()
     }

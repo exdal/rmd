@@ -123,7 +123,7 @@ impl Session {
     }
 
     fn apply_type_visibility(&mut self) {
-        for id in self.state.document_ids() {
+        for id in self.rendered_document_ids() {
             let update = self.caches.get_mut(&id).map_or(PrefabUpdate::Unchanged, |cache| {
                 cache.instances.apply_visibility(&self.type_visibility)
             });

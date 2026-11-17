@@ -7,7 +7,7 @@ use objtree::{ObjectTree, TypeId};
 use crate::session::{LevelChange, Session};
 use crate::{
     bake::BakeUpdate,
-    document::{DocumentId, patch},
+    document::{DocumentId, MapDocument, patch},
 };
 
 pub(crate) fn validate_level(z: u32, levels: u32) -> std::io::Result<()> {
@@ -72,7 +72,7 @@ impl Session {
         }
 
         let levels = document.map.size().z.max(1);
-        document.z < levels || self.tree().is_some()
+        document.z < levels || (self.tree().is_some() && !document.is_stash())
     }
 
     pub fn change_level(&mut self, delta: i32) -> LevelChange {
@@ -94,6 +94,11 @@ impl Session {
         } else {
             current.saturating_add(delta as u32)
         };
+
+        if target > levels && document.is_stash() {
+            return LevelChange::Unchanged;
+        }
+
         if target > levels {
             return LevelChange::NewLevelRequested;
         }
@@ -114,6 +119,10 @@ impl Session {
     }
 
     pub fn create_level(&mut self, id: DocumentId, fill: &[Prefab]) -> Result<u32, String> {
+        if self.state.document(id).is_some_and(MapDocument::is_stash) {
+            return Err(String::from("the stash cannot have levels"));
+        }
+
         self.cancel_node_edit();
 
         let document = self
@@ -162,7 +171,7 @@ impl Session {
     pub fn can_delete_level(&self, id: DocumentId) -> bool {
         self.state
             .document(id)
-            .is_some_and(|document| !document.is_read_only() && document.map.size().z > 1)
+            .is_some_and(|document| !document.is_read_only() && !document.is_stash() && document.map.size().z > 1)
             && !self.has_loaded_conflicts(id)
             && !self.is_coop_level_requested(id)
     }
@@ -240,7 +249,11 @@ impl Session {
 
 impl Session {
     pub fn resize_map(&mut self, width: u32, height: u32, fill: &[Prefab]) -> Result<(), String> {
-        let id = self.state.active().ok_or_else(|| String::from("no map is open"))?;
+        let id = self
+            .state
+            .active()
+            .filter(|id| !self.state.document(*id).is_some_and(MapDocument::is_stash))
+            .ok_or_else(|| String::from("no map is open"))?;
 
         // a resize reshares the map
         if self.is_coop_level_requested(id) {

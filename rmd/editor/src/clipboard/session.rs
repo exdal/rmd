@@ -17,8 +17,13 @@ pub(crate) struct FloatingPaste {
 }
 
 impl Session {
-    fn read_region(&self, selection: Selection, mode: RegionSelectionMode) -> Option<TileRegion> {
+    pub(crate) fn read_region(&self, selection: Selection, mode: RegionSelectionMode) -> Option<TileRegion> {
         let hidden = self.hidden_types();
+        let hidden = match self.active_stash_hidden() {
+            Some(captured) => hidden.union(captured),
+            None => hidden,
+        };
+
         self.state
             .active()
             .and_then(|active| self.effective_grid(active))
@@ -137,18 +142,23 @@ impl Session {
         )
     }
 
-    fn cut_region(&mut self, selection: Selection, mode: RegionSelectionMode, label: &str) -> bool {
-        let Some(region) = self.read_region(selection, mode) else {
-            return false;
-        };
-
-        let Some(action) = self.build_clear(selection, mode, label) else {
-            return false;
-        };
+    pub(crate) fn take_region(
+        &mut self, selection: Selection, mode: RegionSelectionMode, label: &str,
+    ) -> Option<TileRegion> {
+        let region = self.read_region(selection, mode)?;
+        let action = self.build_clear(selection, mode, label)?;
 
         if !self.commit(action, None) {
-            return false;
+            return None;
         }
+
+        Some(region)
+    }
+
+    fn cut_region(&mut self, selection: Selection, mode: RegionSelectionMode, label: &str) -> bool {
+        let Some(region) = self.take_region(selection, mode, label) else {
+            return false;
+        };
 
         self.state.set_clipboard(region);
 
