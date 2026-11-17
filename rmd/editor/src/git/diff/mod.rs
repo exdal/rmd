@@ -1,15 +1,16 @@
 pub(crate) mod session;
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use dmm::{Coord, Map, Prefab, Size, Tile, key::Key, prefabs_equal, tiles_equal};
 
 use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},
-    document::{MapDocument, command::Edit, grid::Grid},
+    document::{
+        MapDocument,
+        command::Edit,
+        grid::{Grid, SharedTile, TileView},
+    },
     git::conflict::{connected_hunks, describe_prefab, set_tile},
 };
 
@@ -137,7 +138,7 @@ pub enum Version<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Identity {
     Key(Key),
-    Shared(*const Tile),
+    Shared(SharedTile),
 }
 
 impl<'a> Version<'a> {
@@ -148,32 +149,35 @@ impl<'a> Version<'a> {
         }
     }
 
-    pub fn tile_at(self, coord: Coord) -> Option<&'a Tile> {
+    pub fn tile_at(self, coord: Coord) -> Option<TileView<'a>> {
         match self {
-            Self::File(map) => map.tile_at(coord),
+            Self::File(map) => map.tile_at(coord).map(TileView::from),
             Self::Working(grid) => grid.tile_at(coord),
         }
     }
 
     /// `None` outside the map
-    fn cell(self, coord: Coord) -> Option<(Identity, &'a Tile)> {
+    fn cell(self, coord: Coord) -> Option<(Identity, TileView<'a>)> {
         match self {
             Self::File(map) => {
                 let key = map.key_at(coord)?;
 
-                Some((Identity::Key(key), map.dictionary.get(&key).unwrap_or(&EMPTY)))
+                Some((
+                    Identity::Key(key),
+                    TileView::from(map.dictionary.get(&key).unwrap_or(&EMPTY)),
+                ))
             },
             Self::Working(grid) => {
-                let tile = grid.shared_tile_at(coord)?;
+                let (shared, tile) = grid.shared_tile_at(coord)?;
 
-                Some((Identity::Shared(Arc::as_ptr(tile)), tile.as_ref()))
+                Some((Identity::Shared(shared), tile))
             },
         }
     }
 }
 
 /// Whether `whole` holds every prefab of `part`, duplicates counted
-fn contains(whole: &Tile, part: &Tile) -> bool {
+fn contains(whole: TileView<'_>, part: TileView<'_>) -> bool {
     let mut used = vec![false; whole.len()];
 
     part.iter().all(|prefab| {
@@ -189,7 +193,7 @@ fn contains(whole: &Tile, part: &Tile) -> bool {
     })
 }
 
-fn classify(from: Option<&Tile>, to: Option<&Tile>) -> Option<ChangeKind> {
+fn classify(from: Option<TileView<'_>>, to: Option<TileView<'_>>) -> Option<ChangeKind> {
     match (from, to) {
         (None, None) => None,
         (None, Some(_)) => Some(ChangeKind::Added),
@@ -349,9 +353,9 @@ fn flush(lines: &mut Vec<TileLine>, removed: &mut Vec<&Prefab>, added: &mut Vec<
 }
 
 /// One line per object, like a unified diff of the two object stacks
-pub fn tile_lines(from: Option<&Tile>, to: Option<&Tile>) -> Vec<TileLine> {
-    let from = from.map_or(&[][..], Vec::as_slice);
-    let to = to.map_or(&[][..], Vec::as_slice);
+pub fn tile_lines(from: Option<TileView<'_>>, to: Option<TileView<'_>>) -> Vec<TileLine> {
+    let from = from.unwrap_or_default();
+    let to = to.unwrap_or_default();
     // shared[i][j] is how many objects `from[i..]` and `to[j..]` have in common, in order
     let mut shared = vec![vec![0usize; to.len() + 1]; from.len() + 1];
     for i in (0..from.len()).rev() {

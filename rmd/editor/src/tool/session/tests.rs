@@ -3,7 +3,7 @@ use base::{path::TreePath, types::Value};
 use dmm::{Coord, Prefab};
 
 use crate::{
-    document::{PrefabInstanceId, command::EditGroupId},
+    document::{PrefabInstanceId, command::EditGroupId, grid::TileView},
     session::{
         FillOutcome, Session,
         fixtures::{area_at, examples, flat_session, focus_session},
@@ -429,7 +429,7 @@ fn context_edits_obey_area_focus_without_blocking_copy() {
         .unwrap();
     assert!(session.choose_type(table));
     let target = session.place_at(outside, None).unwrap();
-    let before = session.map().unwrap().tile_at(outside).unwrap().clone();
+    let before = session.map().unwrap().tile_at(outside).unwrap().to_tile();
     session.toggle_focus_at(Some(inside));
     assert!(session.copy_tile(outside));
     assert!(!session.can_clear_tile(outside));
@@ -439,7 +439,10 @@ fn context_edits_obey_area_focus_without_blocking_copy() {
     assert!(!session.reset_instance_to_default(target));
     assert!(!session.replace_context_instance(target, TreePath::parse("/obj/machinery/light")));
     assert!(!session.can_paste_clipboard(outside, SelectionRotation::Original));
-    assert_eq!(session.map().unwrap().tile_at(outside), Some(&before));
+    assert_eq!(
+        session.map().unwrap().tile_at(outside).map(TileView::to_tile),
+        Some(before.clone())
+    );
 }
 
 fn table() -> Prefab {

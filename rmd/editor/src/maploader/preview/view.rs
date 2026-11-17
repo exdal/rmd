@@ -2,7 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use dmm::{Coord, Prefab, PrefabInstanceId, Size, Tile};
 
-use crate::document::{grid::Grid, instance::PrefabInstance, instance::PrefabLocation};
+use crate::document::{
+    grid::{Grid, TileView},
+    instance::PrefabInstance,
+    instance::PrefabLocation,
+};
 
 #[derive(Debug, Default, Clone)]
 pub(super) struct OverlayTiles {
@@ -56,12 +60,12 @@ impl<'a> MapView<'a> {
         self.source.size()
     }
 
-    pub fn tile_at(self, coord: Coord) -> Option<&'a Tile> {
+    pub fn tile_at(self, coord: Coord) -> Option<TileView<'a>> {
         self.source.tile_at(coord)?;
 
         self.tiles
             .and_then(|tiles| tiles.cells.get(&coord))
-            .map(|cell| &cell.1)
+            .map(|cell| TileView::from(&cell.1))
             .or_else(|| self.source.tile_at(coord))
     }
 

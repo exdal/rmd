@@ -7,7 +7,7 @@ use std::{
 use dmm::{Coord, Map, Prefab, Size};
 
 use crate::{
-    document::MapDocument,
+    document::{MapDocument, grid::TileView},
     focus::AreaFocus,
     session::{
         DocumentCache, Session,
@@ -305,8 +305,14 @@ fn switching_maps_cancels_a_live_node_route_before_activation() {
     assert_eq!(session.state.active(), Some(second));
     assert!(session.node_edit.is_none());
     assert_eq!(
-        session.state.document(second).unwrap().map.tile_at(middle),
-        Some(&second_before)
+        session
+            .state
+            .document(second)
+            .unwrap()
+            .map
+            .tile_at(middle)
+            .map(TileView::to_tile),
+        Some(second_before.clone())
     );
 
     let first_document = session.state.document(first).unwrap();

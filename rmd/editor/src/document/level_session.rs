@@ -277,7 +277,7 @@ impl Session {
                     if document
                         .map
                         .tile_at(Coord::new(x, y, z))
-                        .is_some_and(|tile| tile.as_slice() != fill)
+                        .is_some_and(|tile| tile.iter().ne(fill))
                     {
                         losses += 1;
                     }

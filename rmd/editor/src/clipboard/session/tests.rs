@@ -4,7 +4,7 @@ use dmm::{Coord, Map, Prefab, Size};
 
 use crate::{
     clipboard::PasteMerge,
-    document::{MapDocument, PrefabInstanceId, instance::PlacedPrefab, selection::Selection},
+    document::{MapDocument, PrefabInstanceId, grid::TileView, instance::PlacedPrefab, selection::Selection},
     session::{
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},
@@ -179,7 +179,7 @@ fn cross_map_paste_preserves_the_copied_mask_contents_and_destination_hole() {
                     }
                     assert_eq!(
                         document.map.tile_at(coord).unwrap(),
-                        &expected,
+                        expected,
                         "{mode:?}, {rotation:?}, {coord:?}"
                     );
                     assert_ne!(document.placed_tile(coord).unwrap()[0].id(), before[&coord][0].id());
@@ -545,7 +545,7 @@ fn context_tile_cut_paste_and_delete_are_undoable() {
     let type_id = session.tree().unwrap().id_of(&table).unwrap();
     assert!(session.choose_type(type_id));
     assert!(session.place_at(source, None).is_some());
-    let before = session.map().unwrap().tile_at(source).unwrap().clone();
+    let before = session.map().unwrap().tile_at(source).unwrap().to_tile();
 
     assert!(session.copy_tile(source));
     assert_eq!(session.clipboard().unwrap().tile(0, 0), Some(&before));
@@ -558,16 +558,25 @@ fn context_tile_cut_paste_and_delete_are_undoable() {
         vec![&defaults.turf, &defaults.area]
     );
     assert!(session.undo());
-    assert_eq!(session.map().unwrap().tile_at(source), Some(&before));
+    assert_eq!(
+        session.map().unwrap().tile_at(source).map(TileView::to_tile),
+        Some(before.clone())
+    );
     assert!(session.redo());
 
     assert!(session.paste_clipboard(destination, SelectionRotation::Original));
-    assert_eq!(session.map().unwrap().tile_at(destination), Some(&before));
+    assert_eq!(
+        session.map().unwrap().tile_at(destination).map(TileView::to_tile),
+        Some(before.clone())
+    );
     assert!(session.delete_tile(destination, None));
     assert_render_cache_matches_rebuild(&session);
     assert!(!session.can_clear_tile(destination));
     assert!(session.undo());
-    assert_eq!(session.map().unwrap().tile_at(destination), Some(&before));
+    assert_eq!(
+        session.map().unwrap().tile_at(destination).map(TileView::to_tile),
+        Some(before.clone())
+    );
 }
 
 fn table() -> Prefab {

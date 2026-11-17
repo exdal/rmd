@@ -6,7 +6,7 @@ use winit::event::WindowEvent;
 
 use super::*;
 use super::{args::Arguments, events::is_input, redraw::settle_appearing_windows};
-use crate::environment::worker;
+use crate::{document::grid::TileView, environment::worker};
 
 fn headless_editor() -> App {
     let mut imgui = Context::create();
@@ -265,7 +265,7 @@ a
         assert!(!app.session.state.active_document().unwrap().is_dirty());
         assert_eq!(
             app.session.map().unwrap().tile_at(Coord::new(1, 1, 1)),
-            map.tile_at(Coord::new(1, 1, 1))
+            map.tile_at(Coord::new(1, 1, 1)).map(TileView::from)
         );
         let rendered = Instant::now();
         for frame in 0..5 {

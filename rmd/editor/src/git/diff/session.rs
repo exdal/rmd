@@ -1,10 +1,13 @@
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
-use dmm::{Coord, Map, Tile};
+use dmm::{Coord, Map};
 
 use crate::session::{Session, SharedHighlights};
 use crate::{
-    document::{DocumentId, grid::Grid},
+    document::{
+        DocumentId,
+        grid::{Grid, TileView},
+    },
     git::{
         diff::{self, ChangeKind, DiffSource, MapDiff, Version},
         repo::CommitInfo,
@@ -162,7 +165,9 @@ impl Session {
     }
 
     /// How a tile changed, with its old and new contents, `None` outside a map
-    pub(crate) fn diff_at(&self, id: DocumentId, coord: Coord) -> Option<(ChangeKind, Option<&Tile>, Option<&Tile>)> {
+    pub(crate) fn diff_at(
+        &self, id: DocumentId, coord: Coord,
+    ) -> Option<(ChangeKind, Option<TileView<'_>>, Option<TileView<'_>>)> {
         let kind = self.with_diff_view(id, |view| view.diff.at(coord))??;
         let document = self.state.document(id)?;
         let diff = self.git_state(id)?.diff.as_ref()?;

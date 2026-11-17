@@ -3,7 +3,7 @@ use base::{path::TreePath, types::Value};
 use dmm::{Coord, Map, MapFormat, Prefab, Size};
 
 use crate::{
-    document::MapDocument,
+    document::{MapDocument, grid::TileView},
     session::{
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},
@@ -212,7 +212,7 @@ fn new_map_creation_accepts_dimensions_above_255() {
         assert_eq!(document.z, 1);
         assert!(document.is_dirty());
         for coord in [Coord::new(1, 1, 1), Coord::new(size.x, size.y, size.z)] {
-            assert_eq!(document.map.tile_at(coord), Some(&fill));
+            assert_eq!(document.map.tile_at(coord).map(TileView::to_tile), Some(fill.clone()));
         }
     }
 }

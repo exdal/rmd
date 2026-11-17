@@ -290,8 +290,8 @@ mod tests {
         let mut session = unknown_session();
         let id = session.state.active().unwrap();
         assert_eq!(positions(&session), [[1, 1], [2, 1]]);
-        let unknown = session.map().unwrap().tile_at(Coord::new(2, 1, 1)).unwrap().clone();
-        let known = session.map().unwrap().tile_at(Coord::new(3, 1, 1)).unwrap().clone();
+        let unknown = session.map().unwrap().tile_at(Coord::new(2, 1, 1)).unwrap().to_tile();
+        let known = session.map().unwrap().tile_at(Coord::new(3, 1, 1)).unwrap().to_tile();
         assert!(session.apply_remote_tiles(id, vec![(Coord::new(2, 1, 1), known), (Coord::new(3, 1, 1), unknown)]));
         assert_eq!(positions(&session), [[1, 1], [3, 1]]);
         session.apply_codebase(codebase(&["/obj/missing", "/turf/missing"]));

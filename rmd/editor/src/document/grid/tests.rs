@@ -1,5 +1,4 @@
 use base::{path::TreePath, types::Value};
-use std::sync::Arc;
 
 use dmm::{Coord, Map, Prefab, PrefabInstanceId, key::Key, parser, writer};
 
@@ -50,10 +49,10 @@ fn an_untouched_map_exports_byte_for_byte() {
 #[test]
 fn tiles_of_one_key_share_an_allocation() {
     let grid = Grid::from_map(&map());
-    let shared = |x, y| grid.shared_tile_at(Coord::new(x, y, 1)).unwrap();
+    let shared = |x, y| grid.shared_tile_at(Coord::new(x, y, 1)).unwrap().0;
 
-    assert!(Arc::ptr_eq(shared(1, 2), shared(3, 1)));
-    assert!(!Arc::ptr_eq(shared(1, 2), shared(1, 1)));
+    assert_eq!(shared(1, 2), shared(3, 1));
+    assert_ne!(shared(1, 2), shared(1, 1));
 }
 
 #[test]
@@ -108,7 +107,7 @@ fn an_edited_tile_takes_a_new_key_and_the_rest_keep_theirs() {
 fn a_tile_edited_back_gets_its_key_and_spelling_back() {
     let mut document = MapDocument::new(map(), 1);
     let coord = Coord::new(2, 2, 1);
-    let before = document.map.tile_at(coord).unwrap().clone();
+    let before = document.map.tile_at(coord).unwrap().to_tile();
     replace(&mut document, coord, Vec::new());
 
     let mut smes = Prefab::new(TreePath::parse("/obj/machinery/power/smes"));
@@ -123,7 +122,7 @@ fn a_tile_edited_back_gets_its_key_and_spelling_back() {
 #[test]
 fn a_copied_tile_reuses_the_key_it_was_copied_from() {
     let mut document = MapDocument::new(map(), 1);
-    let smes = document.map.tile_at(Coord::new(2, 2, 1)).unwrap().clone();
+    let smes = document.map.tile_at(Coord::new(2, 2, 1)).unwrap().to_tile();
     replace(&mut document, Coord::new(1, 1, 1), smes);
 
     let exported = document.to_map();
@@ -136,7 +135,7 @@ fn a_tile_matching_several_keys_always_takes_the_lowest() {
     // each parse seeds a new hash order
     for _ in 0..32 {
         let mut document = MapDocument::new(map(), 1);
-        let floor = document.map.tile_at(Coord::new(1, 2, 1)).unwrap().clone();
+        let floor = document.map.tile_at(Coord::new(1, 2, 1)).unwrap().to_tile();
         replace(&mut document, Coord::new(3, 2, 1), floor);
 
         assert_eq!(document.to_map().key_at(Coord::new(3, 2, 1)), Some(key("a")));
@@ -153,9 +152,9 @@ fn a_fill_shares_one_tile() {
     }
     assert!(document.apply(edit));
 
-    let shared = |x| document.map.shared_tile_at(Coord::new(x, 1, 1)).unwrap();
-    assert!(Arc::ptr_eq(shared(1), shared(2)));
-    assert!(Arc::ptr_eq(shared(2), shared(3)));
+    let shared = |x| document.map.shared_tile_at(Coord::new(x, 1, 1)).unwrap().0;
+    assert_eq!(shared(1), shared(2));
+    assert_eq!(shared(2), shared(3));
 }
 
 #[test]
@@ -169,7 +168,7 @@ fn painting_next_to_an_equal_tile_shares_it() {
         );
     }
 
-    let shared = |x| document.map.shared_tile_at(Coord::new(x, 1, 1)).unwrap();
-    assert!(Arc::ptr_eq(shared(1), shared(2)));
-    assert!(Arc::ptr_eq(shared(2), shared(3)));
+    let shared = |x| document.map.shared_tile_at(Coord::new(x, 1, 1)).unwrap().0;
+    assert_eq!(shared(1), shared(2));
+    assert_eq!(shared(2), shared(3));
 }

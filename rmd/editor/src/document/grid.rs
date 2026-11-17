@@ -9,6 +9,11 @@ use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, Tile, key::Key,
 
 use crate::document::{instance::PlacedPrefab, instance::PrefabInstance, instance::PrefabLocation};
 
+pub use view::TileView;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct SharedTile(*const Tile);
+
 #[derive(Debug, Clone, PartialEq)]
 struct Cell {
     tile: Arc<Tile>,
@@ -94,12 +99,14 @@ impl Grid {
         self.size
     }
 
-    pub fn tile_at(&self, coord: Coord) -> Option<&Tile> {
-        Some(&self.cell(coord)?.tile)
+    pub fn tile_at(&self, coord: Coord) -> Option<TileView<'_>> {
+        Some(TileView::from(self.cell(coord)?.tile.as_ref()))
     }
 
-    pub(crate) fn shared_tile_at(&self, coord: Coord) -> Option<&Arc<Tile>> {
-        Some(&self.cell(coord)?.tile)
+    pub(crate) fn shared_tile_at(&self, coord: Coord) -> Option<(SharedTile, TileView<'_>)> {
+        let tile = &self.cell(coord)?.tile;
+
+        Some((SharedTile(Arc::as_ptr(tile)), TileView::from(tile.as_ref())))
     }
 
     pub fn ids_at(&self, coord: Coord) -> &[PrefabInstanceId] {
@@ -405,7 +412,7 @@ impl Grid {
                             known
                                 .get(&paths(tile))?
                                 .iter()
-                                .find(|(_, candidate)| tiles_equal(candidate, tile))
+                                .find(|(_, candidate)| tiles_equal(*candidate, tile))
                                 .copied()
                         });
 
@@ -468,6 +475,7 @@ fn paths(tile: &Tile) -> Vec<&TreePath> {
 
 #[cfg_attr(not(test), expect(dead_code))]
 mod table;
+mod view;
 
 #[cfg(test)]
 mod tests;

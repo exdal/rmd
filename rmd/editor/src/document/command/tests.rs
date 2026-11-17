@@ -3,7 +3,7 @@ use base::{path::TreePath, types::Value};
 use dmm::{Coord, Map, Prefab, Size};
 
 use super::{Edit, EditGroupId};
-use crate::document::MapDocument;
+use crate::document::{MapDocument, grid::TileView};
 
 fn document() -> MapDocument {
     let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
@@ -65,7 +65,7 @@ fn changing_one_prefab_preserves_its_id_and_only_changes_its_cell() {
     let source = Coord::new(1, 1, 1);
     let untouched = Coord::new(2, 1, 1);
     let id = document.instance_ids_at(source)[1];
-    let untouched_before = document.map.tile_at(untouched).cloned();
+    let untouched_before = document.map.tile_at(untouched).map(TileView::to_tile);
     let mut after = document.placed_tile(source).unwrap();
     after[1]
         .prefab_mut()
@@ -77,7 +77,7 @@ fn changing_one_prefab_preserves_its_id_and_only_changes_its_cell() {
 
     assert_eq!(document.instance_ids_at(source)[1], id);
     assert_eq!(document.instance_location(id).unwrap().coord, source);
-    assert_eq!(document.map.tile_at(untouched).cloned(), untouched_before);
+    assert_eq!(document.map.tile_at(untouched).map(TileView::to_tile), untouched_before);
 }
 
 #[test]

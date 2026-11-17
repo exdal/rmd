@@ -7,6 +7,7 @@ use crate::{
     document::{
         MapDocument,
         command::{Edit, EditGroupId, History},
+        grid::TileView,
     },
     git::repo::Operation,
 };
@@ -77,7 +78,7 @@ pub struct ConflictState {
     revision: u64,
 }
 
-pub fn describe_tile(tile: Option<&Tile>) -> String {
+pub fn describe_tile(tile: Option<TileView<'_>>) -> String {
     match tile {
         None => String::from("(outside the map)"),
         Some(tile) if tile.is_empty() => String::from("(empty)"),

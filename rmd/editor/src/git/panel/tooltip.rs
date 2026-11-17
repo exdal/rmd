@@ -1,10 +1,13 @@
 use dear_imgui_rs::Ui;
-use dmm::{Coord, Tile, merge::TileConflict};
+use dmm::{Coord, merge::TileConflict};
 use ui::{icons::materialdesignicons::ICON_ARROW_RIGHT, widgets::opaque};
 
-use crate::git::{
-    conflict::{OURS_COLOR, OURS_LABEL, THEIRS_COLOR, describe_tile},
-    diff::{ADDED_COLOR, ChangeKind, LineKind, REMOVED_COLOR, TileLine, tile_lines},
+use crate::{
+    document::grid::TileView,
+    git::{
+        conflict::{OURS_COLOR, OURS_LABEL, THEIRS_COLOR, describe_tile},
+        diff::{ADDED_COLOR, ChangeKind, LineKind, REMOVED_COLOR, TileLine, tile_lines},
+    },
 };
 
 /// Shown in place of a var value one side doesn't set
@@ -76,8 +79,8 @@ fn draw_tile_lines(ui: &Ui, lines: &[TileLine]) {
 }
 
 /// A side the diff reads from, noting when the tile is past the edge of that version
-fn draw_missing_side(ui: &Ui, tile: Option<&Tile>, label: &str) {
-    if tile.is_none() {
+fn draw_missing_side(ui: &Ui, is_missing: bool, label: &str) {
+    if is_missing {
         ui.text_disabled(format!("(not in {label})"));
     }
 }
@@ -85,7 +88,10 @@ fn draw_missing_side(ui: &Ui, tile: Option<&Tile>, label: &str) {
 pub(crate) fn draw_conflict_tooltip(ui: &Ui, coord: Coord, conflict: &TileConflict) {
     ui.text(format!("Conflict at {}, {}, {}", coord.x, coord.y, coord.z));
     ui.separator();
-    ui.text(format!("Base:\n{}", describe_tile(conflict.base.as_ref())));
+    ui.text(format!(
+        "Base:\n{}",
+        describe_tile(conflict.base.as_ref().map(TileView::from))
+    ));
 
     for (label, color, tile) in [
         (OURS_LABEL, OURS_COLOR, conflict.ours.as_ref()),
@@ -93,14 +99,17 @@ pub(crate) fn draw_conflict_tooltip(ui: &Ui, coord: Coord, conflict: &TileConfli
     ] {
         ui.separator();
         ui.text_colored(opaque(color), label);
-        draw_missing_side(ui, tile, label);
-        draw_tile_lines(ui, &tile_lines(conflict.base.as_ref(), tile));
+        draw_missing_side(ui, tile.is_none(), label);
+        draw_tile_lines(
+            ui,
+            &tile_lines(conflict.base.as_ref().map(TileView::from), tile.map(TileView::from)),
+        );
     }
 }
 
 pub(crate) fn draw_diff_tooltip(
-    ui: &Ui, coord: Coord, kind: ChangeKind, (from_label, before): (&str, Option<&Tile>),
-    (to_label, after): (&str, Option<&Tile>),
+    ui: &Ui, coord: Coord, kind: ChangeKind, (from_label, before): (&str, Option<TileView<'_>>),
+    (to_label, after): (&str, Option<TileView<'_>>),
 ) {
     ui.text_colored(
         opaque(kind.color()),
@@ -108,7 +117,7 @@ pub(crate) fn draw_diff_tooltip(
     );
     ui.text_disabled(format!("{from_label} {ICON_ARROW_RIGHT} {to_label}"));
     ui.separator();
-    draw_missing_side(ui, before, from_label);
-    draw_missing_side(ui, after, to_label);
+    draw_missing_side(ui, before.is_none(), from_label);
+    draw_missing_side(ui, after.is_none(), to_label);
     draw_tile_lines(ui, &tile_lines(before, after));
 }

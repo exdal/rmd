@@ -48,7 +48,7 @@ fn remote_edits_update_the_render_cache_like_a_rebuild() {
         .choose_prefab(Prefab::new(TreePath::parse("/obj/structure/table")));
     session.place_at(from, None).unwrap();
 
-    let tile = |session: &Session, coord| session.map().unwrap().tile_at(coord).unwrap().clone();
+    let tile = |session: &Session, coord| session.map().unwrap().tile_at(coord).unwrap().to_tile();
     let mut source = tile(&session, from);
     let table = source.remove(source.len() - 1);
     let mut destination = tile(&session, to);
@@ -111,7 +111,7 @@ fn apply_remote_tile(session: &mut Session, tile: Vec<Prefab>) {
 fn a_remote_reorder_changes_equal_layer_draw_order() {
     let mut session = tables_session(&["a", "b"]);
     assert_eq!(drawn_tables(&session), ["a", "b"]);
-    let mut tile = session.map().unwrap().tile_at(Coord::new(1, 1, 1)).unwrap().clone();
+    let mut tile = session.map().unwrap().tile_at(Coord::new(1, 1, 1)).unwrap().to_tile();
     let a = tile.iter().position(|prefab| *prefab == named_table("a")).unwrap();
     let b = tile.iter().position(|prefab| *prefab == named_table("b")).unwrap();
     tile.swap(a, b);
@@ -125,7 +125,7 @@ fn a_remote_reorder_changes_equal_layer_draw_order() {
 #[test]
 fn a_remote_insert_between_equal_layers_draws_between_them() {
     let mut session = tables_session(&["a", "b"]);
-    let mut tile = session.map().unwrap().tile_at(Coord::new(1, 1, 1)).unwrap().clone();
+    let mut tile = session.map().unwrap().tile_at(Coord::new(1, 1, 1)).unwrap().to_tile();
     let b = tile.iter().position(|prefab| *prefab == named_table("b")).unwrap();
     tile.insert(b, named_table("c"));
 

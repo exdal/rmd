@@ -149,8 +149,13 @@ pub fn prefabs_equal(left: &Prefab, right: &Prefab) -> bool {
 
 pub type Tile = Vec<Prefab>;
 
-pub fn tiles_equal(left: &Tile, right: &Tile) -> bool {
-    left.len() == right.len() && left.iter().zip(right).all(|(left, right)| prefabs_equal(left, right))
+pub fn tiles_equal<'a, 'b>(
+    left: impl IntoIterator<Item = &'a Prefab, IntoIter: ExactSizeIterator>,
+    right: impl IntoIterator<Item = &'b Prefab, IntoIter: ExactSizeIterator>,
+) -> bool {
+    let (left, right) = (left.into_iter(), right.into_iter());
+
+    left.len() == right.len() && left.zip(right).all(|(left, right)| prefabs_equal(left, right))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

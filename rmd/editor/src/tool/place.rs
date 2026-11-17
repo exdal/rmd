@@ -5,7 +5,9 @@ use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
 
 use crate::{
-    document::{MapDocument, PrefabInstanceId, command::Edit, instance::PlacedPrefab, instance::PlacedTile},
+    document::{
+        MapDocument, PrefabInstanceId, command::Edit, grid::TileView, instance::PlacedPrefab, instance::PlacedTile,
+    },
     environment::world::{BaseTile, World},
     frame::options::HiddenTypes,
 };
@@ -60,7 +62,7 @@ impl BaseKind {
     }
 }
 
-pub fn is_missing_base(tile: &[Prefab]) -> bool {
+pub fn is_missing_base(tile: TileView<'_>) -> bool {
     [BaseKind::Turf, BaseKind::Area]
         .into_iter()
         .any(|kind| !tile.iter().any(|prefab| kind.is_prefab(prefab)))

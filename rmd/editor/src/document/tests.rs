@@ -9,6 +9,7 @@ use super::{Coord, MapDocument, instance::VarMutation, sanitize_vars, selection:
 use crate::{
     document::{
         command::{Edit, EditGroupId},
+        grid::TileView,
         patch,
     },
     focus::AreaFocus,
@@ -257,7 +258,11 @@ fn growing_the_map_fills_new_tiles_and_undo_restores_the_old_size() {
     );
     assert_eq!(document.instance_ids_at(Coord::new(1, 1, 2)), corner);
     for coord in [Coord::new(3, 1, 1), Coord::new(1, 2, 1), Coord::new(3, 2, 2)] {
-        assert_eq!(document.map.tile_at(coord), Some(&resize_fill()), "{coord:?}");
+        assert_eq!(
+            document.map.tile_at(coord).map(TileView::to_tile),
+            Some(resize_fill()),
+            "{coord:?}"
+        );
         assert_eq!(document.instance_ids_at(coord).len(), 2);
     }
     assert_eq!(document.undo_label(), Some("resize map to 3x2"));
@@ -269,7 +274,10 @@ fn growing_the_map_fills_new_tiles_and_undo_restores_the_old_size() {
     assert!(!document.to_map().dictionary.values().any(|tile| *tile == resize_fill()));
 
     assert!(document.redo());
-    assert_eq!(document.map.tile_at(Coord::new(3, 2, 1)), Some(&resize_fill()));
+    assert_eq!(
+        document.map.tile_at(Coord::new(3, 2, 1)).map(TileView::to_tile),
+        Some(resize_fill())
+    );
 }
 
 #[test]
@@ -303,7 +311,7 @@ fn a_resized_map_saves_at_its_new_size() {
 
     assert_eq!((parsed.size.x, parsed.size.y, parsed.size.z), (4, 3, 2));
     assert_eq!(
-        parsed.tile_at(Coord::new(1, 1, 1)),
+        parsed.tile_at(Coord::new(1, 1, 1)).map(TileView::from),
         document.map.tile_at(Coord::new(1, 1, 1))
     );
     assert_eq!(parsed.tile_at(Coord::new(4, 3, 2)), Some(&resize_fill()));
