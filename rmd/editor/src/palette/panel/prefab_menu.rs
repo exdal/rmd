@@ -7,6 +7,7 @@ use ui::widgets::dpi;
 use crate::{
     document::DocumentId,
     palette::panel::thumbnail::{IconOrigin, draw_thumbnail},
+    search::panel::{FindPanel, SimilarMatchKind},
     session::Session,
     settings::{Settings, keybind::KeybindAction},
     viewport::{panel::context_menu::begin_map_popup, preview::PlacementPreview},
@@ -17,6 +18,11 @@ const ROW_HEIGHT: f32 = 64.0;
 const VISIBLE_ROWS: usize = 6;
 const MAX_WIDTH: f32 = 480.0;
 const EMPTY_TEXT: &str = "No instances in this map";
+
+enum RowAction<'a> {
+    Choose(&'a Prefab),
+    Search(&'a Prefab, SimilarMatchKind),
+}
 
 struct Row {
     prefab: Prefab,
@@ -92,7 +98,7 @@ fn override_lines(prefab: &Prefab) -> Vec<String> {
 
 pub(crate) fn update_prefab_menu(
     ui: &Ui, session: &mut Session, settings: &Settings, document: DocumentId, is_focused: bool,
-    menu: &mut Option<PrefabMenu>,
+    menu: &mut Option<PrefabMenu>, find: &mut FindPanel,
 ) {
     let is_open_requested = settings.keybindings.get(KeybindAction::PrefabVariants).is_pressed(ui)
         && is_focused
@@ -129,18 +135,23 @@ pub(crate) fn update_prefab_menu(
         return;
     };
 
-    if let Some(prefab) = draw_rows(ui, open) {
-        session.choose_prefab(prefab.clone());
+    match draw_rows(ui, open) {
+        Some(RowAction::Choose(prefab)) => session.choose_prefab(prefab.clone()),
+        Some(RowAction::Search(prefab, kind)) => {
+            find.open_for_prefab(session, open.document, prefab, kind);
+            ui.close_current_popup();
+        },
+        None => {},
     }
 }
 
-fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<&'a Prefab> {
+fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<RowAction<'a>> {
     if menu.rows.is_empty() {
         ui.text_disabled(EMPTY_TEXT);
         return None;
     }
 
-    let mut chosen = None;
+    let mut action = None;
     for (index, row) in menu.rows.iter().enumerate() {
         if index > 0 {
             ui.separator();
@@ -154,7 +165,17 @@ fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<&'a Prefab> {
             .size([0.0, row.height])
             .build()
         {
-            chosen = Some(&row.prefab);
+            action = Some(RowAction::Choose(&row.prefab));
+        }
+
+        if let Some(_menu) = ui.begin_popup_context_item() {
+            if ui.menu_item("Search by Type") {
+                action = Some(RowAction::Search(&row.prefab, SimilarMatchKind::Type));
+            }
+
+            if ui.menu_item("Search by Prefab ID") {
+                action = Some(RowAction::Search(&row.prefab, SimilarMatchKind::Prefab));
+            }
         }
 
         if !ui.is_item_visible() {
@@ -175,7 +196,7 @@ fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<&'a Prefab> {
         });
     }
 
-    chosen
+    action
 }
 
 fn draw_icon(ui: &Ui, placement: Option<PlacementPreview>, tile_size: u32, extent: f32, row_height: f32) {

@@ -1,4 +1,5 @@
 use base::path::TreePath;
+use dmm::Prefab;
 
 use dear_imgui_rs::{
     Condition, ListClipper, SelectableFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError,
@@ -95,7 +96,13 @@ impl FindPanel {
         else {
             return;
         };
-        let prefab = instance.prefab();
+
+        self.open_for_prefab(session, document, instance.prefab(), kind);
+    }
+
+    pub(crate) fn open_for_prefab(
+        &mut self, session: &Session, document: DocumentId, prefab: &Prefab, kind: SimilarMatchKind,
+    ) {
         let query = match kind {
             SimilarMatchKind::Prefab => SearchQuery::Prefab(prefab.clone()),
             SimilarMatchKind::Type => SearchQuery::Type {

@@ -508,7 +508,7 @@ impl UiState {
             share_presence(session, &frame, coop);
 
             let is_blame_capturing = draw_tile_hover(ui, session, &mut frame, is_over_blame_popup);
-            update_prefab_menu(ui, session, settings, id, frame.is_focused, prefab_menu);
+            update_prefab_menu(ui, session, settings, id, frame.is_focused, prefab_menu, &mut self.find);
             let node_hit = draw_node_hit(ui, session, &frame);
             configure_tool_interaction(session.tool(), frame.interaction);
             self.toggle_focus_on_key(ui, session, settings, &frame);
