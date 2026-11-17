@@ -1,7 +1,7 @@
 use std::{iter, ptr};
 
 use dear_imgui_rs::{Ui, sys};
-use dmm::Prefab;
+use dmm::{Prefab, prefabs_equal};
 use ui::widgets::dpi;
 
 use crate::{
@@ -59,7 +59,7 @@ impl PrefabMenu {
             .into_iter()
             .map(|prefab| build_row(ui, session, prefab, text_width, icon_extent))
             .collect::<Vec<_>>();
-        let selected = rows.iter().position(|row| row.prefab == brush);
+        let selected = rows.iter().position(|row| prefabs_equal(&row.prefab, &brush));
 
         Some(Self {
             document,

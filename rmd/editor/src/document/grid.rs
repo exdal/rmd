@@ -149,6 +149,10 @@ impl Grid {
         })
     }
 
+    pub fn prefabs_of<'a>(&'a self, path: &'a TreePath) -> impl Iterator<Item = &'a Prefab> + 'a {
+        self.table.live().filter(move |prefab| prefab.path == *path)
+    }
+
     pub fn identical(&self, prefab: &Prefab) -> Vec<PrefabInstanceId> {
         let Some(wanted) = self.table.find(prefab) else {
             return Vec::new();

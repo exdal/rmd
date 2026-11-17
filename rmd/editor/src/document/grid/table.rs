@@ -79,7 +79,6 @@ impl PrefabTable {
         self.entry_mut(id).pinned = true;
     }
 
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn live(&self) -> impl Iterator<Item = &Prefab> {
         self.entries
             .iter()

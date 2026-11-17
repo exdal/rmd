@@ -3,7 +3,7 @@ use base::{path::TreePath, types::Value};
 use dmm::{Coord, Map, MapFormat, Prefab, Size};
 
 use crate::{
-    document::{MapDocument, grid::TileView},
+    document::{MapDocument, command::Edit, grid::TileView},
     session::{
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},
@@ -358,4 +358,29 @@ fn exporting_the_open_map_as_tgm_round_trips_through_the_parser() {
     assert_eq!(reparsed.dictionary, before.dictionary);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn map_prefabs_of_lists_each_placed_prefab_once_and_drops_removed_ones() {
+    let path = TreePath::parse("/turf/floor");
+    let floor = Prefab::new(path.clone());
+    let mut east = floor.clone();
+    east.set_var("dir".into(), Value::Num(4.0));
+    let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
+    let plain = map.intern_tile(vec![floor.clone()]);
+    let facing = map.intern_tile(vec![east.clone()]);
+    map.grid[0][0] = vec![plain, facing, plain];
+    let mut session = Session::new();
+    let id = session.state.open_document(MapDocument::new(map, 1));
+    session.rebuild_instances(id);
+
+    assert_eq!(session.map_prefabs_of(id, &path), [floor.clone(), east]);
+
+    let document = session.state.document_mut(id).unwrap();
+    let placed = vec![document.instantiate(floor.clone())];
+    let mut edit = Edit::new("replace");
+    edit.change(document, Coord::new(2, 1, 1), placed);
+    assert!(document.apply(edit));
+
+    assert_eq!(session.map_prefabs_of(id, &path), [floor]);
 }

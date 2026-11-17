@@ -208,14 +208,7 @@ impl Session {
             return Vec::new();
         };
 
-        let mut prefabs = Vec::new();
-        for instance in document.prefab_instances() {
-            let prefab = instance.prefab();
-            if prefab.path == *path && !prefabs.contains(prefab) {
-                prefabs.push(prefab.clone());
-            }
-        }
-
+        let mut prefabs = document.map.prefabs_of(path).cloned().collect::<Vec<_>>();
         prefabs.sort_by_key(|prefab| prefab.vars.len());
         prefabs
     }
