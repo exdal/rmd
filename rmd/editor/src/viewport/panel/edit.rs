@@ -143,7 +143,12 @@ impl UiState {
 
         if matches!(
             action,
-            MenuAction::Undo | MenuAction::Redo | MenuAction::Paste(_) | MenuAction::Cut(_) | MenuAction::Delete(_)
+            MenuAction::Undo
+                | MenuAction::Redo
+                | MenuAction::Paste(_)
+                | MenuAction::Cut(_)
+                | MenuAction::Delete(_)
+                | MenuAction::Stash(_)
         ) {
             self.cancel_view_edits(session, frame);
         }
@@ -220,6 +225,15 @@ impl UiState {
             },
             MenuAction::Mirror(transform) => {
                 session.transform_selected_region_with_mode(transform, session.selection_mode());
+            },
+            MenuAction::Stash(mode) => {
+                self.is_stash_open_requested |= session.stash_selection(mode).is_some();
+            },
+            MenuAction::RemoveFromStash(entry) => {
+                session.remove_stash_entry(entry);
+            },
+            MenuAction::ClearStash => {
+                session.clear_stash();
             },
         }
     }

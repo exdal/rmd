@@ -1,3 +1,4 @@
+pub(crate) mod panel;
 pub(crate) mod session;
 
 use dmm::{Coord, Map, Size};
@@ -85,10 +86,6 @@ impl Stash {
 
     pub fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     fn entry(&self, id: DocumentId) -> Option<&StashEntry> {

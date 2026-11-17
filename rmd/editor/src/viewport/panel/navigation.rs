@@ -5,6 +5,7 @@ use dmm::Coord;
 use ui::widgets::dpi;
 
 use super::{MapViewState, ViewFrame, stroke::ActivePlacementFlash};
+use crate::viewport::camera::Controller;
 use crate::{
     app::pacing::FrameDemand,
     document::DocumentId,
@@ -26,8 +27,16 @@ const PAN_KEYS: [(KeybindAction, [f32; 2]); 4] = [
 
 impl UiState {
     pub(super) fn pan_and_zoom(&self, ui: &Ui, settings: &Settings, frame: &mut ViewFrame<'_>, is_drag_panning: bool) {
+        let origin = frame.layout.viewport.min;
+        let center = frame.layout.center();
+        self.pan_and_zoom_camera(ui, settings, frame.camera, origin, center, is_drag_panning);
+    }
+
+    pub(crate) fn pan_and_zoom_camera(
+        &self, ui: &Ui, settings: &Settings, camera: &mut Controller, origin: [f32; 2], center: [f32; 2],
+        is_drag_panning: bool,
+    ) {
         let io = ui.io();
-        let camera = &mut *frame.camera;
         if !self.gizmo.is_interacting()
             && (ui.is_mouse_down(MouseButton::Middle) || is_drag_panning && ui.is_mouse_down(MouseButton::Left))
         {
@@ -37,8 +46,7 @@ impl UiState {
         let wheel = io.mouse_wheel();
         if !self.gizmo.is_interacting() && wheel != 0.0 {
             let mouse = io.mouse_pos();
-            let min = frame.layout.viewport.min;
-            camera.zoom_by(wheel, [mouse[0] - min[0], mouse[1] - min[1]]);
+            camera.zoom_by(wheel, [mouse[0] - origin[0], mouse[1] - origin[1]]);
         }
 
         let faster = settings.keybindings.get(KeybindAction::PanFaster);
@@ -54,7 +62,6 @@ impl UiState {
             self.raise_demand(FrameDemand::Full);
         }
 
-        let center = frame.layout.center();
         if settings.keybindings.get(KeybindAction::ZoomIn).is_pressed_repeating(ui) {
             camera.zoom_by(1.0, center);
         }
@@ -69,15 +76,16 @@ impl UiState {
     }
 
     pub(super) fn mirror_active_camera(&mut self, session: &mut Session) {
-        let Some(active) = session.state.active() else {
+        let Some(active) = session.state.active().filter(|_| !session.is_stash_active()) else {
             return;
         };
         let Some(camera) = self.map_views.get(&active).map(|view| view.camera.camera) else {
             return;
         };
         let z = session.z();
+        let stash = session.stash_ids();
         for (id, view) in &mut self.map_views {
-            if *id != active {
+            if *id != active && !stash.contains(id) {
                 view.camera.mirror(&camera);
                 session.set_level_of(*id, z);
             }

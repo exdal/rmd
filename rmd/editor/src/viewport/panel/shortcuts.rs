@@ -62,7 +62,7 @@ impl UiState {
         }
     }
 
-    pub(super) fn apply_view_shortcuts(
+    pub(crate) fn apply_view_shortcuts(
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, refit: &mut bool,
     ) {
         if settings.keybindings.get(KeybindAction::ShowAreas).is_pressed(ui) {

@@ -13,6 +13,7 @@ use crate::{
     search::panel::SimilarMatchKind,
     session::Session,
     settings::{Settings, keybind::KeybindAction},
+    stash::session::StashMode,
     tool::{SelectionRotation, SelectionTransform, Tool, session::context_placement_group},
 };
 
@@ -57,6 +58,9 @@ pub(super) enum Action {
     Search(PrefabInstanceId, SimilarMatchKind),
     Node(NodeContext),
     Mirror(SelectionTransform),
+    Stash(StashMode),
+    RemoveFromStash(DocumentId),
+    ClearStash,
 }
 
 pub(crate) fn begin_map_popup<'ui>(
@@ -92,10 +96,18 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
 
     action = draw_node_action(ui, session, target, action);
 
-    action = draw_history_actions(ui, session, settings, action);
+    let is_stash = session.is_stash_active();
+    if !is_stash {
+        action = draw_history_actions(ui, session, settings, action);
+    }
+
     action = draw_clipboard_actions(ui, session, settings, target, coord, action);
 
-    action = draw_mirror_actions(ui, session, target, action);
+    action = draw_stash_actions(ui, session, target, action);
+
+    if !is_stash {
+        action = draw_mirror_actions(ui, session, target, action);
+    }
 
     action = draw_atom_menus(ui, session, target, coord, action);
 
@@ -275,6 +287,10 @@ fn draw_clipboard_actions(
             Action::Copy(coord)
         });
     }
+    if session.is_stash_active() {
+        return action;
+    }
+
     let can_paste = session.can_paste_clipboard(coord, SelectionRotation::Original);
     if ui.menu_item_enabled_selected_with_shortcut(
         "Paste",
@@ -307,6 +323,26 @@ fn draw_clipboard_actions(
         } else {
             Action::Delete(coord)
         });
+    }
+    action
+}
+
+fn draw_stash_actions(ui: &Ui, session: &Session, target: &Target, mut action: Option<Action>) -> Option<Action> {
+    if session.is_stash_active() {
+        ui.separator();
+        if ui.menu_item("Remove from stash") {
+            action = Some(Action::RemoveFromStash(target.document));
+        }
+        if ui.menu_item("Clear stash") {
+            action = Some(Action::ClearStash);
+        }
+    } else if target.region_selected {
+        ui.separator();
+        for (label, mode) in [("Move to stash", StashMode::Move), ("Copy to stash", StashMode::Copy)] {
+            if ui.menu_item_enabled_selected_no_shortcut(label, false, session.can_stash_selection(mode)) {
+                action = Some(Action::Stash(mode));
+            }
+        }
     }
     action
 }
@@ -351,6 +387,7 @@ fn draw_atom_menus(
                 path_width.max(ui.calc_text_size(format!("[{}]", prefab.path))[0]),
             )
         });
+    let is_stash = session.is_stash_active();
     let icon_extent = ui.text_line_height();
     let icon_width = icon_extent + ui.clone_style().item_inner_spacing()[0];
     let path_column = icon_width + name_width + 20.0;
@@ -384,57 +421,64 @@ fn draw_atom_menus(
         let origin = ui.cursor_screen_pos();
         let submenu = ui.begin_menu(&label);
         if let Some(_menu) = submenu {
-            if ui.menu_item_enabled_selected_no_shortcut("Move to Top", false, reorderable) {
-                action = Some(Action::Reorder(instance, true));
+            if !is_stash {
+                if ui.menu_item_enabled_selected_no_shortcut("Move to Top", false, reorderable) {
+                    action = Some(Action::Reorder(instance, true));
+                }
+                if ui.menu_item_enabled_selected_no_shortcut("Move to Bottom", false, reorderable) {
+                    action = Some(Action::Reorder(instance, false));
+                }
+                ui.separator();
             }
-            if ui.menu_item_enabled_selected_no_shortcut("Move to Bottom", false, reorderable) {
-                action = Some(Action::Reorder(instance, false));
-            }
-            ui.separator();
             if ui.menu_item("Select") {
                 action = Some(Action::Select(instance));
             }
-            if ui.menu_item_enabled_selected_no_shortcut("Delete", false, editable) {
-                action = Some(Action::DeleteAtom(instance));
-            }
-            if let Some(_replace) = ui.begin_menu_with_enabled("Replace", editable) {
-                if target.replace_for != Some(instance) {
-                    target.replace_for = Some(instance);
-                    target.replace_query.clear();
+            if !is_stash {
+                if ui.menu_item_enabled_selected_no_shortcut("Delete", false, editable) {
+                    action = Some(Action::DeleteAtom(instance));
                 }
-                if let Some(selected) = session.palette()
-                    && let Some(tree) = session.tree()
-                    && let Some(kind) = context_placement_group(tree, &prefab.path)
-                    && context_placement_group(tree, &selected.path) == Some(kind)
-                {
-                    let enabled = selected.path != prefab.path || !prefab.vars.is_empty();
-                    if ui.menu_item_enabled_selected_no_shortcut(
-                        format!("Use selected type: {}", selected.path),
-                        false,
-                        enabled,
-                    ) {
-                        action = Some(Action::Replace(instance, selected.path.clone()));
+                if let Some(_replace) = ui.begin_menu_with_enabled("Replace", editable) {
+                    if target.replace_for != Some(instance) {
+                        target.replace_for = Some(instance);
+                        target.replace_query.clear();
                     }
-                    ui.separator();
+                    if let Some(selected) = session.palette()
+                        && let Some(tree) = session.tree()
+                        && let Some(kind) = context_placement_group(tree, &prefab.path)
+                        && context_placement_group(tree, &selected.path) == Some(kind)
+                    {
+                        let enabled = selected.path != prefab.path || !prefab.vars.is_empty();
+                        if ui.menu_item_enabled_selected_no_shortcut(
+                            format!("Use selected type: {}", selected.path),
+                            false,
+                            enabled,
+                        ) {
+                            action = Some(Action::Replace(instance, selected.path.clone()));
+                        }
+                        ui.separator();
+                    }
+                    let kind = session
+                        .tree()
+                        .and_then(|tree| context_placement_group(tree, &prefab.path));
+                    if let Some(path) = draw_type_path_search(
+                        ui,
+                        session.tree(),
+                        &mut target.replace_query,
+                        "##replace-type-search",
+                        50,
+                        |tree, path| kind.is_some_and(|kind| context_placement_group(tree, path) == Some(kind)),
+                        |path| *path != prefab.path || !prefab.vars.is_empty(),
+                    ) {
+                        action = Some(Action::Replace(instance, path));
+                    }
                 }
-                let kind = session
-                    .tree()
-                    .and_then(|tree| context_placement_group(tree, &prefab.path));
-                if let Some(path) = draw_type_path_search(
-                    ui,
-                    session.tree(),
-                    &mut target.replace_query,
-                    "##replace-type-search",
-                    50,
-                    |tree, path| kind.is_some_and(|kind| context_placement_group(tree, path) == Some(kind)),
-                    |path| *path != prefab.path || !prefab.vars.is_empty(),
+                if ui.menu_item_enabled_selected_no_shortcut(
+                    "Reset to Default",
+                    false,
+                    editable && !prefab.vars.is_empty(),
                 ) {
-                    action = Some(Action::Replace(instance, path));
+                    action = Some(Action::Reset(instance));
                 }
-            }
-            if ui.menu_item_enabled_selected_no_shortcut("Reset to Default", false, editable && !prefab.vars.is_empty())
-            {
-                action = Some(Action::Reset(instance));
             }
             ui.separator();
             if ui.menu_item("Search by Type") {

@@ -115,7 +115,7 @@ impl UiState {
             "Save...",
             settings.keybindings.get(KeybindAction::Save).label(ui),
             false,
-            session.map().is_some(),
+            session.map().is_some() && !session.is_stash_active(),
         ) {
             actions.open_save_dialog = true;
         }
@@ -152,7 +152,7 @@ impl UiState {
             "Close map",
             settings.keybindings.get(KeybindAction::CloseMap).label(ui),
             false,
-            session.map().is_some(),
+            session.map().is_some() && !session.is_stash_active(),
         ) {
             actions.close_map = true;
         }
@@ -258,20 +258,26 @@ fn draw_edit_menu(ui: &Ui, session: &Session, settings: &Settings, actions: &mut
     ui.separator();
     let selected = session.selection().is_some();
     let is_picking = session.tool() == Tool::Pick && session.picked_instance().is_some();
+    let is_stash = session.is_stash_active();
     for (label, action, command, enabled) in [
         ("Copy", KeybindAction::Copy, EditCommand::Copy, selected || is_picking),
-        ("Cut", KeybindAction::Cut, EditCommand::Cut, selected || is_picking),
+        (
+            "Cut",
+            KeybindAction::Cut,
+            EditCommand::Cut,
+            (selected || is_picking) && !is_stash,
+        ),
         (
             "Paste",
             KeybindAction::Paste,
             EditCommand::Paste,
-            session.clipboard().is_some(),
+            session.clipboard().is_some() && !is_stash,
         ),
         (
             "Delete",
             KeybindAction::Delete,
             EditCommand::Delete,
-            selected || session.picked_instance().is_some(),
+            (selected || session.picked_instance().is_some()) && !is_stash,
         ),
         (
             "Deselect",
@@ -307,7 +313,11 @@ fn draw_edit_menu(ui: &Ui, session: &Session, settings: &Settings, actions: &mut
     ) {
         actions.go_to = true;
     }
-    if ui.menu_item_enabled_selected_no_shortcut("Resize map...", false, session.map().is_some()) {
+    if ui.menu_item_enabled_selected_no_shortcut(
+        "Resize map...",
+        false,
+        session.map().is_some() && !session.is_stash_active(),
+    ) {
         actions.resize_map = true;
     }
 }
@@ -410,6 +420,7 @@ fn draw_window_menu(ui: &Ui, settings: &Settings, actions: &mut MenuActions) {
             Panel::Search => "Search",
             Panel::MapIssues => "Map Issues",
             Panel::Runtimes => "Runtimes",
+            Panel::Stash => "Stash",
         };
         if ui.menu_item_enabled_selected_no_shortcut(label, settings.panels.is_open(panel), true) {
             actions.toggle_panel = Some(panel);

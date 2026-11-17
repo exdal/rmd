@@ -89,16 +89,18 @@ pub(crate) enum Panel {
     Search,
     MapIssues,
     Runtimes,
+    Stash,
 }
 
 impl Panel {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ObjectTree,
         Self::Git,
         Self::Inspector,
         Self::Search,
         Self::MapIssues,
         Self::Runtimes,
+        Self::Stash,
     ];
 }
 
@@ -112,6 +114,7 @@ pub(crate) struct OpenPanels {
     #[serde(skip)]
     pub map_issues: bool,
     pub runtimes: bool,
+    pub stash: bool,
 }
 
 impl OpenPanels {
@@ -123,6 +126,7 @@ impl OpenPanels {
             Panel::Search => self.search,
             Panel::MapIssues => self.map_issues,
             Panel::Runtimes => self.runtimes,
+            Panel::Stash => self.stash,
         }
     }
 
@@ -134,6 +138,7 @@ impl OpenPanels {
             Panel::Search => &mut self.search,
             Panel::MapIssues => &mut self.map_issues,
             Panel::Runtimes => &mut self.runtimes,
+            Panel::Stash => &mut self.stash,
         }
     }
 }
@@ -147,6 +152,7 @@ impl Default for OpenPanels {
             search: true,
             map_issues: false,
             runtimes: false,
+            stash: false,
         }
     }
 }

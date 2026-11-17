@@ -96,12 +96,15 @@ impl InspectorState {
         self.sync(&snapshot);
         let find_similar = ui.text_link("Find similar...");
         let is_preview = snapshot.picked.get() >= PREVIEW_ID_START;
+        let is_stash = session.is_stash_active();
         if is_preview {
             ui.text_disabled("Module preview, read only");
+        } else if is_stash {
+            ui.text_disabled("Stash, read only");
         }
 
         ui.separator();
-        let _disabled = ui.begin_disabled_with_cond(is_preview);
+        let _disabled = ui.begin_disabled_with_cond(is_preview || is_stash);
         session.refresh_identical();
         match self.scope {
             EditScope::Selected => {

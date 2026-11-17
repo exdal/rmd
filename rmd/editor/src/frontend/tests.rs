@@ -830,3 +830,100 @@ fn editing_commands_are_bound_to_the_usual_chords() {
     assert!(KeybindAction::ALL.contains(&KeybindAction::Recent1));
     assert!(KeybindAction::ALL.contains(&KeybindAction::Recent0));
 }
+
+fn stash_region(session: &mut Session) -> crate::document::DocumentId {
+    let mut map = dmm::Map::new(Size { x: 2, y: 2, z: 1 });
+    let key = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/open/floor"))]);
+    for row in &mut map.grid[0] {
+        row.fill(key);
+    }
+
+    let document = crate::document::MapDocument::new(map, 1);
+    let selection =
+        crate::document::selection::Selection::from_drag(dmm::Coord::new(1, 1, 1), dmm::Coord::new(2, 2, 1));
+    let region = crate::clipboard::copy_region(
+        (&document.map).into(),
+        selection,
+        crate::tool::RegionSelectionMode::Full,
+        crate::frame::options::HiddenTypes::default(),
+    )
+    .unwrap();
+
+    session.state.stash_mut().push(region)
+}
+
+#[test]
+fn the_stash_view_follows_its_panel_and_hands_the_active_map_back() {
+    let _guard = CONTEXT_LOCK.lock().unwrap();
+    let mut context = docking_context();
+    let mut state = UiState::new(false).unwrap();
+    state.show_welcome = false;
+    let mut session = Session::new();
+    let mut themes = Themes::load(None, context.style(), DEFAULT_THEME);
+    let map = session.state.open_document(crate::document::MapDocument::new(
+        dmm::Map::new(Size { x: 4, y: 4, z: 1 }),
+        1,
+    ));
+    let entry = stash_region(&mut session);
+    let mut settings = Settings::default();
+    settings.panels.stash = true;
+
+    for _ in 0..3 {
+        let ui = context.frame();
+        state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
+        assert!(context.render_legacy().valid());
+    }
+    assert!(state.map_views.contains_key(&entry));
+    assert!(state.map_views.contains_key(&map));
+
+    assert!(session.set_active_document(entry));
+    settings.panels.stash = false;
+    let ui = context.frame();
+    state.draw(ui, &mut session, &mut settings, &mut themes, None).unwrap();
+    assert!(context.render_legacy().valid());
+    assert!(!state.map_views.contains_key(&entry));
+    assert_eq!(session.state.active(), Some(map));
+}
+
+#[test]
+fn stash_entries_sit_side_by_side_in_one_view_without_any_map_open() {
+    let _guard = CONTEXT_LOCK.lock().unwrap();
+    let mut context = rectangle_context();
+    let mut state = UiState::new(false).unwrap();
+    let mut session = Session::new();
+    let entries = [stash_region(&mut session), stash_region(&mut session)];
+    let mut settings = Settings::default();
+    settings.panels.stash = true;
+
+    let mut views = Vec::new();
+    for _ in 0..3 {
+        let ui = context.frame();
+        (views, ..) = state.draw_map_views(ui, &mut session, &mut settings, false);
+        assert!(context.render_legacy().valid());
+    }
+
+    assert_eq!(views.iter().map(|view| view.document).collect::<Vec<_>>(), entries);
+    assert!(settings.panels.stash);
+
+    let [first, second] = [views[0].rect, views[1].rect];
+    assert!(second.x >= first.x + first.width, "{first:?} {second:?}");
+    assert_eq!(first.y + first.height, second.y + second.height);
+}
+
+#[test]
+fn exiting_with_a_stashed_region_asks_first() {
+    let _guard = CONTEXT_LOCK.lock().unwrap();
+    let mut context = rectangle_context();
+    let mut state = UiState::new(false).unwrap();
+    let mut session = Session::new();
+
+    state.request_exit();
+    assert!(state.draw_exit_confirmation(context.frame(), &session));
+    assert!(context.render_legacy().valid());
+
+    stash_region(&mut session);
+    state.request_exit();
+    assert!(!state.draw_exit_confirmation(context.frame(), &session));
+    assert!(state.exit_requested);
+    assert!(context.render_legacy().valid());
+}

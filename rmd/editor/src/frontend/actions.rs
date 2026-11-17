@@ -37,6 +37,7 @@ impl UiState {
             Panel::Search => self.find.request(),
             Panel::MapIssues => self.issues.request(None),
             Panel::Runtimes => self.runtimes.request(),
+            Panel::Stash => {},
         }
     }
 
@@ -87,6 +88,7 @@ impl UiState {
         let is_save_pressed =
             self.map_keys_enabled(ui, session) && settings.keybindings.get(KeybindAction::Save).is_pressed(ui);
         if session.map().is_some()
+            && !session.is_stash_active()
             && !menu.open_save_dialog
             && self.save_dialog.is_none()
             && (is_save_requested || is_save_pressed)
@@ -114,6 +116,7 @@ impl UiState {
         }
 
         if menu.close_map
+            && !session.is_stash_active()
             && let Some(id) = session.state.active()
         {
             self.request_close(session, [id]);

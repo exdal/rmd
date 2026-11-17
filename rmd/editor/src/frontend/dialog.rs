@@ -105,7 +105,8 @@ impl UiState {
             .iter()
             .filter(|document| document.is_dirty())
             .count();
-        if unsaved == 0 {
+        let stashed = session.stash_len();
+        if unsaved == 0 && stashed == 0 {
             self.exit_requested = false;
 
             return true;
@@ -118,18 +119,32 @@ impl UiState {
             return false;
         };
 
-        if unsaved == 1 {
-            ui.text("A map has unsaved changes.");
-        } else {
-            ui.text(format!("{unsaved} maps have unsaved changes."));
+        match unsaved {
+            0 => {},
+            1 => ui.text("A map has unsaved changes."),
+            _ => ui.text(format!("{unsaved} maps have unsaved changes.")),
         }
-        ui.text("Exit without saving?");
+
+        match stashed {
+            0 => {},
+            1 => ui.text("The stash holds 1 region, if you exit now it will be lost."),
+            _ => ui.text(format!(
+                "The stash holds {stashed} regions, if you exit now they will be lost."
+            )),
+        }
+
+        let (question, exit_label) = if unsaved > 0 {
+            ("Exit without saving?", "Exit Without Saving")
+        } else {
+            ("Exit anyway?", "Exit Anyway")
+        };
+        ui.text(question);
 
         let pressed = dialog_buttons(
             ui,
             &[
                 DialogButton::cancel("Cancel"),
-                DialogButton::destructive("Exit Without Saving", false),
+                DialogButton::destructive(exit_label, false),
             ],
             true,
         );
@@ -319,7 +334,7 @@ impl UiState {
         &mut self, ui: &Ui, session: &mut Session, settings: &mut Settings, refit: bool,
     ) -> (Vec<VisibleMapView>, Option<usize>) {
         self.follow_coop_peer(ui, session);
-        let (map_views, picking, coop) = if session.state.is_empty() {
+        let (map_views, picking, coop) = if session.state.is_empty() && !settings.panels.stash {
             (Vec::new(), None, CoopPresence::default())
         } else {
             self.draw_map_views(ui, session, settings, refit)
