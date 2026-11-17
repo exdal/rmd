@@ -1,47 +1,89 @@
-use std::{ops::Index, slice};
+use std::{fmt, iter::FusedIterator, ops::Index, slice};
 
 use dmm::{Prefab, Tile};
 
-pub type Iter<'a> = slice::Iter<'a, Prefab>;
+use super::table::{PrefabId, PrefabTable};
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy)]
+enum Source<'a> {
+    Prefabs(&'a [Prefab]),
+    Interned {
+        table: &'a PrefabTable,
+        ids: &'a [PrefabId],
+    },
+}
+
+#[derive(Clone, Copy)]
 pub struct TileView<'a> {
-    prefabs: &'a [Prefab],
+    source: Source<'a>,
 }
 
 impl<'a> TileView<'a> {
+    pub(super) fn interned(table: &'a PrefabTable, ids: &'a [PrefabId]) -> Self {
+        Self {
+            source: Source::Interned { table, ids },
+        }
+    }
+
     pub fn len(self) -> usize {
-        self.prefabs.len()
+        match self.source {
+            Source::Prefabs(prefabs) => prefabs.len(),
+            Source::Interned { ids, .. } => ids.len(),
+        }
     }
 
     pub fn is_empty(self) -> bool {
-        self.prefabs.is_empty()
+        self.len() == 0
     }
 
     pub fn get(self, index: usize) -> Option<&'a Prefab> {
-        self.prefabs.get(index)
+        match self.source {
+            Source::Prefabs(prefabs) => prefabs.get(index),
+            Source::Interned { table, ids } => ids.get(index).map(|id| table.get(*id)),
+        }
     }
 
     pub fn first(self) -> Option<&'a Prefab> {
-        self.prefabs.first()
+        self.get(0)
     }
 
     pub fn contains(self, prefab: &Prefab) -> bool {
-        self.prefabs.contains(prefab)
+        self.iter().any(|candidate| candidate == prefab)
     }
 
     pub fn iter(self) -> Iter<'a> {
-        self.prefabs.iter()
+        Iter {
+            source: match self.source {
+                Source::Prefabs(prefabs) => IterSource::Prefabs(prefabs.iter()),
+                Source::Interned { table, ids } => IterSource::Interned { table, ids: ids.iter() },
+            },
+        }
     }
 
     pub fn to_tile(self) -> Tile {
-        self.prefabs.to_vec()
+        self.iter().cloned().collect()
+    }
+}
+
+impl Default for TileView<'_> {
+    fn default() -> Self {
+        Self {
+            source: Source::Prefabs(&[]),
+        }
+    }
+}
+
+impl fmt::Debug for TileView<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
     }
 }
 
 impl<'a> From<&'a Tile> for TileView<'a> {
     fn from(tile: &'a Tile) -> Self {
-        Self { prefabs: tile }
+        Self {
+            source: Source::Prefabs(tile),
+        }
     }
 }
 
@@ -58,7 +100,7 @@ impl Index<usize> for TileView<'_> {
     type Output = Prefab;
 
     fn index(&self, index: usize) -> &Prefab {
-        &self.prefabs[index]
+        self.get(index).expect("tile index out of bounds")
     }
 }
 
@@ -73,3 +115,48 @@ impl PartialEq<Tile> for TileView<'_> {
         self.iter().eq(other)
     }
 }
+
+#[derive(Clone)]
+enum IterSource<'a> {
+    Prefabs(slice::Iter<'a, Prefab>),
+    Interned {
+        table: &'a PrefabTable,
+        ids: slice::Iter<'a, PrefabId>,
+    },
+}
+
+#[derive(Clone)]
+pub struct Iter<'a> {
+    source: IterSource<'a>,
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = &'a Prefab;
+
+    fn next(&mut self) -> Option<&'a Prefab> {
+        match &mut self.source {
+            IterSource::Prefabs(prefabs) => prefabs.next(),
+            IterSource::Interned { table, ids } => ids.next().map(|id| table.get(*id)),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match &self.source {
+            IterSource::Prefabs(prefabs) => prefabs.size_hint(),
+            IterSource::Interned { ids, .. } => ids.size_hint(),
+        }
+    }
+}
+
+impl DoubleEndedIterator for Iter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match &mut self.source {
+            IterSource::Prefabs(prefabs) => prefabs.next_back(),
+            IterSource::Interned { table, ids } => ids.next_back().map(|id| table.get(*id)),
+        }
+    }
+}
+
+impl ExactSizeIterator for Iter<'_> {}
+
+impl FusedIterator for Iter<'_> {}

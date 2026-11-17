@@ -172,3 +172,52 @@ fn painting_next_to_an_equal_tile_shares_it() {
     assert_eq!(shared(1), shared(2));
     assert_eq!(shared(2), shared(3));
 }
+
+#[test]
+fn placement_counts_match_the_cells_through_every_kind_of_edit() {
+    let mut document = MapDocument::new(map(), 1);
+    let floor = || Prefab::new(TreePath::parse("/turf/open/floor"));
+    document.map.assert_placement_counts();
+
+    replace(&mut document, Coord::new(1, 1, 1), vec![floor()]);
+    document.map.assert_placement_counts();
+
+    let smes = document.instance_ids_at(Coord::new(2, 2, 1))[0];
+    assert_eq!(
+        document.set_instance_var(smes, "name".into(), Value::Text("battery".into())),
+        Some(true)
+    );
+    document.map.assert_placement_counts();
+
+    assert!(document.resize(4, 3, &[floor()]));
+    document.map.assert_placement_counts();
+
+    assert!(document.resize(2, 1, &[floor()]));
+    document.map.assert_placement_counts();
+
+    assert_eq!(document.append_level(&[floor()]), Some(2));
+    document.map.assert_placement_counts();
+
+    assert!(document.delete_level(1));
+    document.map.assert_placement_counts();
+
+    while document.undo() {
+        document.map.assert_placement_counts();
+    }
+
+    while document.redo() {
+        document.map.assert_placement_counts();
+    }
+
+    document.apply_remote(vec![(Coord::new(1, 1, 1), vec![floor(), floor()])]);
+    document.map.assert_placement_counts();
+}
+
+#[test]
+fn identical_matches_prefabs_written_differently() {
+    let grid = Grid::from_map(&map());
+    let mut smes = Prefab::new(TreePath::parse("/obj/machinery/power/smes"));
+    smes.set_var("charge".into(), Value::Num(2e5));
+
+    assert_eq!(grid.identical(&smes), grid.ids_at(Coord::new(2, 2, 1))[..1]);
+}
