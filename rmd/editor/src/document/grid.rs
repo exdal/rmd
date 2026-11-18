@@ -157,6 +157,10 @@ impl Grid {
         self.table.pin(id);
     }
 
+    pub(crate) fn is_placed(&self, prefab: &Prefab) -> bool {
+        self.table.find(prefab).is_some_and(|id| self.table.placed(id) > 0)
+    }
+
     pub fn prefabs_of<'a>(&'a self, path: &'a TreePath) -> impl Iterator<Item = &'a Prefab> + 'a {
         self.table.live().filter(move |prefab| prefab.path == *path)
     }

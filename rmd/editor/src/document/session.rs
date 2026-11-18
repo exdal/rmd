@@ -209,8 +209,14 @@ impl Session {
         };
 
         let mut prefabs = document.map.prefabs_of(path).cloned().collect::<Vec<_>>();
-        prefabs.sort_by_key(|prefab| prefab.vars.len());
+        prefabs.sort_by_cached_key(|prefab| (!document.map.is_placed(prefab), prefab.vars.len()));
         prefabs
+    }
+
+    pub fn is_prefab_placed(&self, id: DocumentId, prefab: &Prefab) -> bool {
+        self.state
+            .document(id)
+            .is_some_and(|document| document.map.is_placed(prefab))
     }
 
     pub fn pin_prefabs(&mut self, id: DocumentId, prefabs: &[Prefab]) {

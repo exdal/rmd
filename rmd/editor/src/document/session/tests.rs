@@ -1,3 +1,5 @@
+use std::slice;
+
 use base::{path::TreePath, types::Value};
 
 use dmm::{Coord, Map, MapFormat, Prefab, Size};
@@ -405,4 +407,24 @@ fn pinned_prefabs_stay_listed_without_placements_and_are_never_written() {
     document.map.assert_placement_counts();
     let written = document.to_map();
     assert_eq!(written.dictionary.values().collect::<Vec<_>>(), [&vec![floor]]);
+}
+
+#[test]
+fn map_prefabs_of_lists_placed_prefabs_before_pinned_ones() {
+    let path = TreePath::parse("/turf/floor");
+    let floor = Prefab::new(path.clone());
+    let mut east = floor.clone();
+    east.set_var("dir".into(), Value::Num(4.0));
+    let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+    let facing = map.intern_tile(vec![east.clone()]);
+    map.grid[0][0][0] = facing;
+    let mut session = Session::new();
+    let id = session.state.open_document(MapDocument::new(map, 1));
+    session.rebuild_instances(id);
+
+    session.pin_prefabs(id, slice::from_ref(&floor));
+
+    assert_eq!(session.map_prefabs_of(id, &path), [east.clone(), floor.clone()]);
+    assert!(session.is_prefab_placed(id, &east));
+    assert!(!session.is_prefab_placed(id, &floor));
 }

@@ -4,7 +4,12 @@ use std::{
     sync::Arc,
 };
 
-use dmm::{Map, error::MapError};
+use base::{
+    types::{Identifier, Value},
+    vars,
+};
+
+use dmm::{Map, Prefab, error::MapError};
 use objtree::{ObjectTree, TypeId};
 use render::texture::TextureCatalog;
 
@@ -16,7 +21,7 @@ use crate::{
         worker::LoadedCodebase,
         world::World,
     },
-    frame::options::TypeVisibility,
+    frame::{options::TypeVisibility, visual},
     session::Session,
     tool::Tool,
 };
@@ -343,6 +348,33 @@ impl Session {
 
     pub fn icon_metadata(&self, name: &str) -> Option<&dmi::metadata::Metadata> {
         self.state.environment.as_ref()?.icon(name)
+    }
+
+    pub(crate) fn icon_state_variants(&self, prefab: &Prefab) -> Vec<Prefab> {
+        let Some(environment) = self.state.environment.as_ref() else {
+            return Vec::new();
+        };
+
+        let Some(id) = environment.tree.id_of(&prefab.path) else {
+            return Vec::new();
+        };
+
+        let appearance = visual::resolve_id(&environment.tree, id, prefab);
+        let Some(metadata) = appearance.icon.as_deref().and_then(|icon| environment.icon(icon)) else {
+            return Vec::new();
+        };
+
+        let mut seen = HashSet::new();
+        metadata
+            .states
+            .iter()
+            .filter(|state| seen.insert(state.name.as_str()))
+            .map(|state| {
+                let mut variant = prefab.clone();
+                variant.set_var(Identifier::from(vars::ICON_STATE), Value::Text(state.name.clone()));
+                variant
+            })
+            .collect()
     }
 }
 

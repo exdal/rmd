@@ -17,12 +17,12 @@ const POPUP: &str = "Prefab variants##prefab-variants";
 const ROW_HEIGHT: f32 = 64.0;
 const VISIBLE_ROWS: usize = 6;
 const MAX_WIDTH: f32 = 480.0;
-const EMPTY_TEXT: &str = "No instances in this map";
 
 enum RowAction<'a> {
     Choose(&'a Prefab),
     Search(&'a Prefab, SimilarMatchKind),
     GenerateDirections(usize),
+    GenerateIcons(usize),
 }
 
 struct Row {
@@ -31,6 +31,7 @@ struct Row {
     path: String,
     overrides: Vec<String>,
     height: f32,
+    is_generated: bool,
 }
 
 pub(crate) struct PrefabMenu {
@@ -57,7 +58,7 @@ impl PrefabMenu {
         let rows = session
             .map_prefabs_of(document, &brush.path)
             .into_iter()
-            .map(|prefab| build_row(ui, session, prefab, text_width, icon_extent))
+            .map(|prefab| build_row(ui, session, document, prefab, text_width, icon_extent))
             .collect::<Vec<_>>();
         let selected = rows.iter().position(|row| prefabs_equal(&row.prefab, &brush));
 
@@ -71,27 +72,36 @@ impl PrefabMenu {
         })
     }
 
-    fn generate_directions(&mut self, ui: &Ui, session: &mut Session, index: usize) {
-        let variants = session.direction_variants(&self.rows[index].prefab);
+    fn insert_variants(&mut self, ui: &Ui, session: &mut Session, index: usize, variants: Vec<Prefab>) {
         session.pin_prefabs(self.document, &variants);
         let rows = variants
             .into_iter()
             .filter(|prefab| !self.rows.iter().any(|row| prefabs_equal(&row.prefab, prefab)))
-            .map(|prefab| build_row(ui, session, prefab, self.text_width, self.icon_extent))
+            .map(|prefab| build_row(ui, session, self.document, prefab, self.text_width, self.icon_extent))
             .collect::<Vec<_>>();
         let count = rows.len();
+        let at = if self.rows[index].is_generated {
+            index + 1
+        } else {
+            self.rows
+                .iter()
+                .position(|row| row.is_generated)
+                .unwrap_or(self.rows.len())
+        };
 
-        self.rows.splice(index + 1..index + 1, rows);
+        self.rows.splice(at..at, rows);
 
         if let Some(selected) = &mut self.selected
-            && *selected > index
+            && *selected >= at
         {
             *selected += count;
         }
     }
 }
 
-fn build_row(ui: &Ui, session: &mut Session, prefab: Prefab, text_width: f32, icon_extent: f32) -> Row {
+fn build_row(
+    ui: &Ui, session: &mut Session, document: DocumentId, prefab: Prefab, text_width: f32, icon_extent: f32,
+) -> Row {
     let spacing_y = ui.clone_style().item_spacing()[1];
     let path = prefab.path.to_string();
     let overrides = override_lines(&prefab);
@@ -106,6 +116,7 @@ fn build_row(ui: &Ui, session: &mut Session, prefab: Prefab, text_width: f32, ic
         path,
         overrides,
         height: icon_extent.max(text_height),
+        is_generated: !session.is_prefab_placed(document, &prefab),
         prefab,
     }
 }
@@ -163,20 +174,33 @@ pub(crate) fn update_prefab_menu(
             find.open_for_prefab(session, open.document, prefab, kind);
             ui.close_current_popup();
         },
-        Some(RowAction::GenerateDirections(index)) => open.generate_directions(ui, session, index),
+        Some(RowAction::GenerateDirections(index)) => {
+            let variants = session.direction_variants(&open.rows[index].prefab);
+            open.insert_variants(ui, session, index, variants);
+        },
+        Some(RowAction::GenerateIcons(index)) => {
+            let variants = session.icon_state_variants(&open.rows[index].prefab);
+            open.insert_variants(ui, session, index, variants);
+        },
         None => {},
     }
 }
 
 fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<RowAction<'a>> {
     if menu.rows.is_empty() {
-        ui.text_disabled(EMPTY_TEXT);
+        ui.text_disabled("No instances in this map");
         return None;
     }
 
     let mut action = None;
     for (index, row) in menu.rows.iter().enumerate() {
-        if index > 0 {
+        let is_section_start = row.is_generated
+            && index
+                .checked_sub(1)
+                .is_none_or(|previous| !menu.rows[previous].is_generated);
+        if is_section_start {
+            ui.separator_with_text("Generated");
+        } else if index > 0 {
             ui.separator();
         }
 
@@ -203,6 +227,10 @@ fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<RowAction<'a>> {
             ui.separator();
             if ui.menu_item("Generate Directions") {
                 action = Some(RowAction::GenerateDirections(index));
+            }
+
+            if ui.menu_item("Generate Icons") {
+                action = Some(RowAction::GenerateIcons(index));
             }
         }
 
