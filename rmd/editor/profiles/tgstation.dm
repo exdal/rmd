@@ -44,6 +44,34 @@
 /datum/controller/subsystem/spatial_grid/demir_preview/get_cells_in_range(atom/center, range)
 	return list()
 
+// update_greyscale() queues smoothing atoms. bake() smooths them itself.
+/datum/controller/subsystem/icon_smooth/demir_preview/New()
+	SSicon_smooth = src
+
+/datum/controller/subsystem/icon_smooth/demir_preview/add_to_queue(atom/thing)
+	return
+
+// Configs load when the first atom asks for a GAGS icon, so a missing library fails only GAGS atoms.
+/datum/controller/subsystem/processing/greyscale/demir_preview/New()
+	SSgreyscale = src
+	initialized = TRUE
+
+/datum/controller/subsystem/processing/greyscale/demir_preview/GetColoredIconByType(type, list/colors)
+	if(!length(configurations))
+		demir_load_configs()
+	return ..()
+
+// Same as Initialize() with USE_RUSTG_ICONFORGE_GAGS, minus Refresh() and CrossVerify(), which build
+// layers only BYOND's own generator uses. Refresh() reads the JSON the same way.
+/datum/controller/subsystem/processing/greyscale/demir_preview/proc/demir_load_configs()
+	for(var/greyscale_type in subtypesof(/datum/greyscale_config))
+		var/datum/greyscale_config/config = new greyscale_type()
+		configurations["[greyscale_type]"] = config
+		config.raw_json_string = rustg_file_read(config.string_json_config)
+		var/result = rustg_iconforge_load_gags_config(greyscale_type, config.raw_json_string, config.string_icon_file)
+		if(result != "OK")
+			CRASH(result)
+
 /datum/controller/configuration/demir_preview/New()
 	config = src
 
@@ -65,6 +93,10 @@
 		SSmachines = new /datum/controller/subsystem/machines/demir_preview
 	if(!SSspatial_grid)
 		SSspatial_grid = new /datum/controller/subsystem/spatial_grid/demir_preview
+	if(!SSicon_smooth)
+		SSicon_smooth = new /datum/controller/subsystem/icon_smooth/demir_preview
+	if(!SSgreyscale && demir_trusted())
+		SSgreyscale = new /datum/controller/subsystem/processing/greyscale/demir_preview
 	bitflag_lists = list()
 	gvars_datum_init_order = list()
 	InitGlobalcardinals()
@@ -145,15 +177,28 @@
 
 // atmos_init() finds the nodes and redraws the device. It does not build pipe networks.
 /obj/machinery/atmospherics/demir_bake_appearance()
-	// GAGS icons are built at runtime, so keep the mapped icon_state.
+	nodes = list()
+	nodes.len = device_type
+	if(SSgreyscale)
+		atmos_init()
+		return
+
+	// Without iconforge there is no GAGS icon, so keep the mapped icon_state.
 	var/preview_state = icon_state
 	var/gags = greyscale_config
 	greyscale_config = null
-	nodes = list()
-	nodes.len = device_type
 	atmos_init()
 	if(gags)
 		icon_state = preview_state
+
+// window_glass draws through vis_contents, which the bake does not export.
+/obj/machinery/atmospherics/components/tank/demir_bake_appearance()
+	. = ..()
+	if(!SSgreyscale)
+		return
+
+	demir_bake_smoothing()
+	overlays += mutable_appearance(greyscaled_icon, /obj/effect/abstract/tank_glass::icon_state)
 
 /obj/machinery/atmospherics/pipe/layer_manifold/demir_bake_appearance()
 	icon_state = "manifoldlayer_center"
@@ -546,6 +591,15 @@
 	..()
 	update_appearance()
 
+// Same as the greyscale and post_init_icon_state steps of /atom/Initialize().
+/atom/proc/demir_prepare_greyscale()
+	if(!SSgreyscale || !greyscale_config || !greyscale_colors)
+		return
+
+	update_greyscale()
+	if(post_init_icon_state)
+		icon_state = post_init_icon_state
+
 // Initialize() sets the port directions from dir. Smart pipes read their neighbors' ports in
 // can_be_node().
 /obj/machinery/atmospherics/demir_prepare_state()
@@ -553,6 +607,29 @@
 	if(pipe_flags & PIPING_CARDINAL_AUTONORMALIZE)
 		normalize_cardinal_directions()
 	set_init_directions(initialize_directions)
+	demir_prepare_greyscale()
+
+// Same as the Initialize() chain. RefreshParts() sets the temperature range the icon color reads.
+/obj/machinery/atmospherics/components/unary/thermomachine/demir_prepare_state()
+	RefreshParts()
+	return ..()
+
+/obj/machinery/atmospherics/components/unary/thermomachine/freezer/on/demir_prepare_state()
+	. = ..()
+	if(target_temperature == initial(target_temperature))
+		target_temperature = min_temperature
+
+/obj/machinery/atmospherics/components/unary/thermomachine/freezer/on/coldroom/demir_prepare_state()
+	. = ..()
+	target_temperature = COLD_ROOM_TEMP
+
+/obj/machinery/portable_atmospherics/demir_prepare_state()
+	..()
+	demir_prepare_greyscale()
+
+/obj/machinery/meter/demir_prepare_state()
+	..()
+	demir_prepare_greyscale()
 
 // The bake skips New(), where areas set up their power bookkeeping.
 /area/demir_prepare_state()

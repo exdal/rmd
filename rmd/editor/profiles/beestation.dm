@@ -63,6 +63,25 @@
 /datum/controller/configuration/demir_preview/New()
 	config = src
 
+/datum/controller/subsystem/processing/greyscale/demir_preview/New()
+	SSgreyscale = src
+	initialized = TRUE
+
+/datum/controller/subsystem/processing/greyscale/demir_preview/GetColoredIconByType(type, list/colors)
+	if(!length(configurations))
+		demir_load_configs()
+
+	return ..()
+
+/datum/controller/subsystem/processing/greyscale/demir_preview/proc/demir_load_configs()
+	for(var/greyscale_type in subtypesof(/datum/greyscale_config))
+		var/datum/greyscale_config/config = new greyscale_type()
+		configurations["[greyscale_type]"] = config
+		config.raw_json_string = rustg_file_read(config.string_json_config)
+		var/result = rustg_iconforge_load_gags_config(greyscale_type, config.raw_json_string, config.string_icon_file)
+		if(result != "OK")
+			CRASH(result)
+
 /datum/controller/configuration/demir_preview/Get(entry_type)
 	var/datum/config_entry/entry = entry_type
 	return initial(entry.default)
@@ -87,6 +106,8 @@
 		SSicon_smooth = new /datum/controller/subsystem/icon_smooth/demir_preview
 	if(!SSvis_overlays)
 		SSvis_overlays = new /datum/controller/subsystem/vis_overlays/demir_preview
+	if(!SSgreyscale && demir_trusted())
+		SSgreyscale = new /datum/controller/subsystem/processing/greyscale/demir_preview
 	bitflag_lists = list()
 	gvars_datum_init_order = list()
 	InitGlobalcardinals()
@@ -187,12 +208,16 @@
 
 // atmos_init() finds the nodes and redraws the device. It does not build pipe networks.
 /obj/machinery/atmospherics/demir_bake_appearance()
-	// GAGS icons are built at runtime, so keep the mapped icon_state.
+	nodes = list()
+	nodes.len = device_type
+	if(SSgreyscale)
+		atmos_init()
+		return
+
+	// Without iconforge there is no GAGS icon, so keep the mapped icon_state.
 	var/preview_state = icon_state
 	var/gags = greyscale_config
 	greyscale_config = null
-	nodes = list()
-	nodes.len = device_type
 	atmos_init()
 	if(gags)
 		icon_state = preview_state
@@ -571,6 +596,11 @@
 /obj/machinery/atmospherics/pipe/smart/set_init_directions(init_dir)
 	initialize_directions = init_dir || ALL_CARDINALS
 
+// Same as the greyscale step of /atom/Initialize().
+/atom/proc/demir_prepare_greyscale()
+	if(SSgreyscale && greyscale_config && greyscale_colors)
+		update_greyscale()
+
 // Initialize() sets the port directions from dir. Smart pipes read their neighbors' ports in
 // can_be_node().
 /obj/machinery/atmospherics/demir_prepare_state()
@@ -578,6 +608,30 @@
 	if(pipe_flags & PIPING_CARDINAL_AUTONORMALIZE)
 		normalize_cardinal_directions()
 	set_init_directions(initialize_directions)
+	demir_prepare_greyscale()
+
+// Same as the Initialize() chain. RefreshParts() sets the temperature range the icon color reads.
+/obj/machinery/atmospherics/components/unary/thermomachine/demir_prepare_state()
+	. = ..()
+	wanted_on = on
+	RefreshParts()
+
+/obj/machinery/atmospherics/components/unary/thermomachine/freezer/on/demir_prepare_state()
+	. = ..()
+	if(target_temperature == initial(target_temperature))
+		target_temperature = min_temperature
+
+/obj/machinery/atmospherics/components/unary/thermomachine/freezer/on/coldroom/demir_prepare_state()
+	. = ..()
+	target_temperature = COLD_ROOM_TEMP
+
+/obj/machinery/portable_atmospherics/demir_prepare_state()
+	..()
+	demir_prepare_greyscale()
+
+/obj/machinery/meter/demir_prepare_state()
+	..()
+	demir_prepare_greyscale()
 
 // The bake skips New(), where areas set up their power bookkeeping.
 /area/demir_prepare_state()
