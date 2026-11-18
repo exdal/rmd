@@ -264,7 +264,6 @@ impl Session {
         let instances = match (self.state.environment.as_ref(), self.effective_grid(id)) {
             (Some(environment), Some(grid)) => frame::build_view_with_options(
                 &environment.tree,
-                &environment.icons,
                 &self.textures,
                 grid,
                 FrameRenderOptions {

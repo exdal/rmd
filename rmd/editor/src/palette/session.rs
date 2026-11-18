@@ -5,7 +5,6 @@ use objtree::TypeId;
 use render::{SpriteTexture, texture::TextureCatalog};
 
 use crate::{
-    environment::Environment,
     frame::{self, visual},
     session::Session,
     tool::{Tool, place::is_placeable},
@@ -22,16 +21,16 @@ pub(crate) struct PrefabThumbnail {
 const STANDALONE_CACHE_LIMIT: usize = 256;
 
 pub(crate) fn prefab_thumbnail_for(
-    textures: &TextureCatalog, environment: &Environment, appearance: &visual::Appearance,
+    textures: &TextureCatalog, appearance: &visual::Appearance,
 ) -> Option<PrefabThumbnail> {
-    let texture = frame::sprite_texture(&environment.icons, textures, appearance)?;
+    let texture = frame::sprite_texture(textures, appearance)?;
     thumbnail_for_texture(textures, appearance, texture)
 }
 
 pub(crate) fn prefab_thumbnail_or_missing(
-    textures: &TextureCatalog, environment: &Environment, appearance: &visual::Appearance,
+    textures: &TextureCatalog, appearance: &visual::Appearance,
 ) -> Option<PrefabThumbnail> {
-    let texture = frame::sprite_texture_or_missing(&environment.icons, textures, appearance)?;
+    let texture = frame::sprite_texture_or_missing(textures, appearance)?;
     thumbnail_for_texture(textures, appearance, texture)
 }
 
@@ -76,7 +75,7 @@ impl Session {
     pub(crate) fn prefab_appearance(&mut self, prefab: &Prefab) -> Option<visual::Appearance> {
         let environment = self.state.environment.clone()?;
         let appearance = visual::resolve(&environment.tree, prefab);
-        if frame::sprite_texture(&environment.icons, &self.textures, &appearance).is_some() {
+        if frame::sprite_texture(&self.textures, &appearance).is_some() {
             return Some(appearance);
         }
 
@@ -99,19 +98,16 @@ impl Session {
 
     pub(crate) fn prefab_thumbnail(&mut self, prefab: &Prefab) -> Option<PrefabThumbnail> {
         let appearance = self.prefab_appearance(prefab)?;
-        let environment = self.state.environment.as_ref()?;
 
-        self.prefab_thumbnail_for(environment, &appearance)
+        self.prefab_thumbnail_for(&appearance)
     }
 
     pub(crate) fn type_thumbnail(&self, id: TypeId) -> Option<PrefabThumbnail> {
         self.type_thumbnails.get(&id).copied().flatten()
     }
 
-    pub(crate) fn prefab_thumbnail_for(
-        &self, environment: &Environment, appearance: &visual::Appearance,
-    ) -> Option<PrefabThumbnail> {
-        prefab_thumbnail_or_missing(&self.textures, environment, appearance)
+    pub(crate) fn prefab_thumbnail_for(&self, appearance: &visual::Appearance) -> Option<PrefabThumbnail> {
+        prefab_thumbnail_or_missing(&self.textures, appearance)
     }
 
     pub fn choose_type(&mut self, selected: TypeId) -> bool {

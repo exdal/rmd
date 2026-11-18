@@ -342,7 +342,7 @@ impl Session {
     }
 
     pub fn icon_metadata(&self, name: &str) -> Option<&dmi::metadata::Metadata> {
-        self.state.environment.as_ref()?.icon(name)
+        self.textures.metadata(name)
     }
 }
 

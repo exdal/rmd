@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
-use dmi::metadata::{Dir, Metadata};
+use dmi::metadata::Dir;
 use dmm::Coord;
 use objtree::{ObjectTree, TypeId};
 use render::{SpriteInstance, SpriteTexture, UpdateRange, texture::TextureCatalog};
@@ -226,8 +226,7 @@ pub fn instance_for(
 }
 
 pub fn build_view_with_options(
-    tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog, map: MapView<'_>,
-    options: FrameRenderOptions<'_>,
+    tree: &ObjectTree, textures: &TextureCatalog, map: MapView<'_>, options: FrameRenderOptions<'_>,
 ) -> FrameInstances {
     let mut keyed_sprites = Vec::new();
     let mut primary_sprites = HashMap::new();
@@ -242,7 +241,6 @@ pub fn build_view_with_options(
         node_types: options.node_types,
         appearances: options.appearances,
         tree,
-        icons,
         textures,
         map,
         area,
@@ -321,8 +319,8 @@ pub fn build_view_with_options(
 }
 
 pub fn update_view_prefabs_with_options(
-    instances: &mut FrameInstances, tree: &ObjectTree, icons: &HashMap<String, Metadata>, textures: &TextureCatalog,
-    map: MapView<'_>, owners: &[PrefabInstanceId], options: FrameRenderOptions<'_>,
+    instances: &mut FrameInstances, tree: &ObjectTree, textures: &TextureCatalog, map: MapView<'_>,
+    owners: &[PrefabInstanceId], options: FrameRenderOptions<'_>,
 ) -> PrefabUpdate {
     let mut owners = owners
         .iter()
@@ -431,7 +429,6 @@ pub fn update_view_prefabs_with_options(
         appearances: options.appearances,
         node_types: options.node_types,
         tree,
-        icons,
         textures,
         map,
         area: tree.roots().area,
@@ -485,22 +482,18 @@ fn current_placement(tree: &ObjectTree, map: MapView<'_>, owner: PrefabInstanceI
     })
 }
 
-pub fn sprite_texture(
-    icons: &HashMap<String, Metadata>, textures: &TextureCatalog, appearance: &Appearance,
-) -> Option<SpriteTexture> {
+pub fn sprite_texture(textures: &TextureCatalog, appearance: &Appearance) -> Option<SpriteTexture> {
     let icon = appearance.icon.as_deref()?;
     let state = appearance.icon_state.as_deref().unwrap_or("");
-    let metadata = icons.get(icon)?;
+    let metadata = textures.metadata(icon)?;
     let dir = Dir::from_bits(appearance.dir).unwrap_or(Dir::South);
     let cell = metadata.find(state)?.sprite_index(dir, 0);
 
     textures.lookup(icon, cell)
 }
 
-pub fn sprite_texture_or_missing(
-    icons: &HashMap<String, Metadata>, textures: &TextureCatalog, appearance: &Appearance,
-) -> Option<SpriteTexture> {
-    sprite_texture(icons, textures, appearance).or_else(|| {
+pub fn sprite_texture_or_missing(textures: &TextureCatalog, appearance: &Appearance) -> Option<SpriteTexture> {
+    sprite_texture(textures, appearance).or_else(|| {
         appearance.icon.as_deref().filter(|icon| !icon.is_empty())?;
         if appearance.alpha == 0 || appearance.invisibility > 0 {
             return None;

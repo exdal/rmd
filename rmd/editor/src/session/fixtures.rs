@@ -515,7 +515,6 @@ pub(crate) fn assert_render_cache_matches_rebuild(session: &Session) {
     let document_id = session.state.active().unwrap();
     let expected = crate::frame::build_view_with_options(
         &environment.tree,
-        &environment.icons,
         &session.textures,
         session.effective_grid(document_id).unwrap(),
         crate::frame::options::FrameRenderOptions {

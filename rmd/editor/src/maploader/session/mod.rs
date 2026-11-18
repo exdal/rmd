@@ -132,7 +132,7 @@ impl Session {
         let appearance = visual::resolve(&environment.tree, prefab);
 
         Some(PlacementPreview {
-            thumbnail: prefab_thumbnail_or_missing(&self.textures, environment, &appearance)?,
+            thumbnail: prefab_thumbnail_or_missing(&self.textures, &appearance)?,
             offset: [
                 appearance
                     .step_x

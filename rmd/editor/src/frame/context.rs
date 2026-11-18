@@ -5,7 +5,6 @@ use std::{
 };
 
 use defines::{EFFECTS_LAYER, FLOAT_LAYER, KEEP_APART, KEEP_TOGETHER};
-use dmi::metadata::Metadata;
 use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
 use render::{SpriteInstance, SpriteTexture, texture::TextureCatalog};
@@ -48,7 +47,6 @@ pub(super) struct RenderContext<'a> {
     pub(super) node_types: Option<&'a HashSet<TypeId>>,
     pub(super) appearances: &'a HashMap<u64, SharedAppearance>,
     pub(super) tree: &'a ObjectTree,
-    pub(super) icons: &'a HashMap<String, Metadata>,
     pub(super) textures: &'a TextureCatalog,
     pub(super) map: MapView<'a>,
     pub(super) area: Option<TypeId>,
@@ -80,7 +78,7 @@ impl RenderContext<'_> {
 
         let appearance = visual::resolve_overlay(self.tree, parent, delta);
         let mut own = Vec::new();
-        if let Some(texture) = sprite_texture(self.icons, self.textures, &appearance) {
+        if let Some(texture) = sprite_texture(self.textures, &appearance) {
             let mut sprite = self.instance(owner, &appearance, texture, coord, false);
             sprite.area_owner = area_owner;
             own.push(sprite);
@@ -182,7 +180,7 @@ impl RenderContext<'_> {
         let appearance = delta
             .map(|delta| visual::resolve_delta(self.tree, id, prefab, delta))
             .unwrap_or_else(|| visual::resolve_id(self.tree, id, prefab));
-        let texture = sprite_texture(self.icons, self.textures, &appearance);
+        let texture = sprite_texture(self.textures, &appearance);
         let mut own = Vec::with_capacity(if is_area { 2 } else { 1 });
 
         if is_area {
@@ -229,7 +227,7 @@ impl RenderContext<'_> {
         };
         if groups.is_empty()
             && !is_area
-            && let Some(fallback) = sprite_texture_or_missing(self.icons, self.textures, &appearance)
+            && let Some(fallback) = sprite_texture_or_missing(self.textures, &appearance)
                 .filter(|texture| self.textures.is_missing_icon(*texture))
         {
             let mut sprite = self.instance(owner, &appearance, fallback, coord, false);

@@ -205,7 +205,7 @@ fn compatibility_appearances_and_types_survive_runtime_baking() {
     let mut textures = render::texture::TextureCatalog::new();
     textures.insert("editor.dmi", &file).expect("pack editor icon");
     textures.insert("runtime.dmi", &file).expect("pack runtime icon");
-    assert!(frame::sprite_texture(&environment.icons, &textures, &smoothed_appearance).is_some());
+    assert!(frame::sprite_texture(&textures, &smoothed_appearance).is_some());
     assert!(standalone.appearance(&environment, &helper).is_none());
 
     let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
@@ -313,13 +313,7 @@ fn overlays_follow_the_owner_dir_and_sort_by_layer() -> Result<(), &'static str>
         )
         .expect("pack test icon");
     let visibility = frame::options::TypeVisibility::default();
-    let instances = fixtures::build_with_options(
-        &environment.tree,
-        &environment.icons,
-        &textures,
-        &document,
-        options(&visibility, &bake),
-    );
+    let instances = fixtures::build_with_options(&environment.tree, &textures, &document, options(&visibility, &bake));
     let depths = instances.live_sprites().map(|sprite| sprite.depth).collect::<Vec<_>>();
 
     assert_eq!(depths, [1.0, owner.layer, owner.layer]);
@@ -360,13 +354,7 @@ fn overlays_below_float_layer_draw_under_their_owner() {
         )
         .expect("pack test icon");
     let visibility = frame::options::TypeVisibility::default();
-    let instances = fixtures::build_with_options(
-        &environment.tree,
-        &environment.icons,
-        &textures,
-        &document,
-        options(&visibility, &bake),
-    );
+    let instances = fixtures::build_with_options(&environment.tree, &textures, &document, options(&visibility, &bake));
     let colors = instances
         .live_sprites()
         .filter(|sprite| sprite.depth > 1.0)
@@ -410,13 +398,8 @@ fn derived_sprites_follow_edits_and_history_without_changing_map_bytes() -> Resu
         )
         .expect("pack test icon");
     let visibility = frame::options::TypeVisibility::default();
-    let mut instances = fixtures::build_with_options(
-        &environment.tree,
-        &environment.icons,
-        &textures,
-        &document,
-        options(&visibility, &bake),
-    );
+    let mut instances =
+        fixtures::build_with_options(&environment.tree, &textures, &document, options(&visibility, &bake));
 
     // Every wall draws itself and its `light` overlay.
     assert_eq!(instances.live_sprites().count(), 18);
@@ -431,19 +414,12 @@ fn derived_sprites_follow_edits_and_history_without_changing_map_bytes() -> Resu
     fixtures::update_prefabs_with_options(
         &mut instances,
         &environment.tree,
-        &environment.icons,
         &textures,
         &document,
         &affected.appearances,
         options(&visibility, &bake),
     );
-    let rebuilt = fixtures::build_with_options(
-        &environment.tree,
-        &environment.icons,
-        &textures,
-        &document,
-        options(&visibility, &bake),
-    );
+    let rebuilt = fixtures::build_with_options(&environment.tree, &textures, &document, options(&visibility, &bake));
 
     assert!(instances.live_sprites().eq(rebuilt.live_sprites()));
 

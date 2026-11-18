@@ -193,7 +193,7 @@ impl Session {
         }
 
         let appearance = visual::resolve_id(&environment.tree, id, &prefab);
-        let texture = frame::sprite_texture_or_missing(&environment.icons, &self.textures, &appearance)?;
+        let texture = frame::sprite_texture_or_missing(&self.textures, &appearance)?;
         let mut sprite = frame::instance_for(
             owner,
             &appearance,
@@ -224,8 +224,7 @@ impl Session {
 
     pub(crate) fn prefab_placement(&mut self, prefab: &Prefab) -> Option<PlacementPreview> {
         let appearance = self.prefab_appearance(prefab)?;
-        let environment = self.state.environment.as_ref()?;
-        let thumbnail = self.prefab_thumbnail_for(environment, &appearance)?;
+        let thumbnail = self.prefab_thumbnail_for(&appearance)?;
         let offset = [
             appearance
                 .step_x

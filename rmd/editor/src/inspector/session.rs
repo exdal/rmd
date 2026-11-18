@@ -149,7 +149,13 @@ impl Session {
             .roots()
             .movable
             .is_some_and(|movable| environment.tree.is_subtype_of(id, movable));
-        let direction = direction_state(environment, id, &appearance, self.declared_directions(&prefab.path));
+        let direction = direction_state(
+            environment,
+            &self.textures,
+            id,
+            &appearance,
+            self.declared_directions(&prefab.path),
+        );
 
         Some(PickedTransform {
             picked,

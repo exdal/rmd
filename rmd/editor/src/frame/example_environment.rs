@@ -31,7 +31,7 @@ fn the_example_map_resolves_to_sprites() {
     assert!(errors.is_empty(), "{errors:?}");
 
     let document = MapDocument::new(map, 1);
-    let instances = build(&environment.tree, &environment.icons, &textures, &document, 32);
+    let instances = build(&environment.tree, &textures, &document, 32);
     let sprites = instances.live_sprites().copied().collect::<Vec<_>>();
 
     // 8x6 turfs, three tables, one light, and the 24 tiles around the area's perimeter.
@@ -65,7 +65,7 @@ fn turfs_sort_under_objects() {
     let source = std::fs::read_to_string(root.join("test.dmm")).expect("map");
     let (map, _) = dmm::parser::parse(&source);
     let document = MapDocument::new(map, 1);
-    let instances = build(&environment.tree, &environment.icons, &textures, &document, 32);
+    let instances = build(&environment.tree, &textures, &document, 32);
     let sprites = instances.live_sprites().copied().collect::<Vec<_>>();
 
     // Neither `/turf` nor `/obj` declares a layer, so this is `demir.dm`'s builtin defaults

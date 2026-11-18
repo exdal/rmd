@@ -193,10 +193,6 @@ impl Environment {
         }
     }
 
-    pub fn icon(&self, name: &str) -> Option<&Metadata> {
-        self.icons.get(name)
-    }
-
     /// `'icons/obj/items.dmi'`
     pub fn icon_paths(&self) -> BTreeSet<&str> {
         self.tree

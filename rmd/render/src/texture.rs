@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dmi::{IconFile, IconInfo};
+use dmi::{IconFile, IconInfo, metadata::Metadata};
 
 use crate::SpriteTexture;
 
@@ -82,10 +82,16 @@ impl TextureData {
     }
 }
 
+#[derive(Debug)]
+struct CatalogIcon {
+    metadata: Metadata,
+    cells: Vec<SpriteTexture>,
+}
+
 #[derive(Debug, Default)]
 pub struct TextureCatalog {
     textures: Vec<TextureData>,
-    sheets: HashMap<String, Vec<SpriteTexture>>,
+    icons: HashMap<String, CatalogIcon>,
     cell_count: usize,
     missing_icon: Option<SpriteTexture>,
 }
@@ -155,9 +161,13 @@ impl TextureCatalog {
 
     /// `metadata.find(state)?.sprite_index(dir, frame)` gives `cell`.
     pub fn lookup(&self, icon: &str, cell: usize) -> Option<SpriteTexture> {
-        let texture = self.sheets.get(icon)?.get(cell)?;
+        let texture = self.icons.get(icon)?.cells.get(cell)?;
 
         (texture.width > 0 && texture.height > 0).then_some(*texture)
+    }
+
+    pub fn metadata(&self, icon: &str) -> Option<&Metadata> {
+        self.icons.get(icon).map(|icon| &icon.metadata)
     }
 
     pub fn insert(&mut self, icon: &str, file: &IconFile) -> Result<(), TextureError> {
@@ -259,7 +269,13 @@ impl TextureCatalog {
             });
             self.cell_count = self.cell_count.saturating_add(mapped);
         }
-        self.sheets.insert(icon.to_string(), textures);
+        self.icons.insert(
+            icon.to_string(),
+            CatalogIcon {
+                metadata: info.metadata.clone(),
+                cells: textures,
+            },
+        );
 
         Ok(())
     }

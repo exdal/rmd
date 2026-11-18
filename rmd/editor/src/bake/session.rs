@@ -405,7 +405,6 @@ impl Session {
             (Some(environment), Some(document)) => frame::update_view_prefabs_with_options(
                 &mut cache.instances,
                 &environment.tree,
-                &environment.icons,
                 textures,
                 cache.modules.view(&document.map),
                 &affected,

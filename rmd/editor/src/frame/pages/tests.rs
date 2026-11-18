@@ -10,7 +10,7 @@ use crate::{
         PrefabUpdate,
         fixtures::{build, build_with_options, update_prefab, update_prefabs},
         options::{FrameRenderOptions, TypeVisibility},
-        tests::{assert_render_data_matches, document, icons, textures, tree},
+        tests::{assert_render_data_matches, document, textures, tree},
     },
 };
 
@@ -45,17 +45,16 @@ fn place(document: &mut MapDocument, coord: Coord, path: &str) -> PrefabInstance
 #[test]
 fn a_placement_uploads_only_the_pages_it_touches() {
     let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 2.0)]);
-    let icons = icons(&["floor", "table"]);
     let textures = textures(&["floor", "table"]);
     let mut document = document(floor_map(24, 24, 2));
-    let mut instances = build(&tree, &icons, &textures, &document, 32);
+    let mut instances = build(&tree, &textures, &document, 32);
     let slots = instances.sprites.len();
 
     assert_eq!(instances.pages.len(), 6);
     assert_pages_hold(&instances);
 
     let table = place(&mut document, Coord::new(5, 5, 1), "/obj/table");
-    let update = update_prefab(&mut instances, &tree, &icons, &textures, &document, table, 32);
+    let update = update_prefab(&mut instances, &tree, &textures, &document, table, 32);
     let PrefabUpdate::Buffers { sprites, .. } = update else {
         panic!("a placement must stay incremental");
     };
@@ -63,26 +62,25 @@ fn a_placement_uploads_only_the_pages_it_touches() {
     assert_eq!(sprites.len(), 1);
     assert_eq!(sprites[0].end - sprites[0].start, PAGE_CAPACITY);
     assert_eq!(instances.sprites.len(), slots);
-    assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
 }
 
 #[test]
 fn equal_layer_turf_priority_follows_moves_type_changes_and_history() {
     let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 2.0)]);
-    let icons = icons(&["floor", "table"]);
     let textures = textures(&["floor", "table"]);
     let mut document = document(floor_map(24, 24, 1));
     let table = place(&mut document, Coord::new(5, 24, 1), "/obj/table");
-    let mut instances = build(&tree, &icons, &textures, &document, 32);
+    let mut instances = build(&tree, &textures, &document, 32);
     assert_eq!(instances.live_sprites().last().unwrap().owner, table);
 
     assert_eq!(
         document.move_instance(&tree, table, Coord::new(20, 1, 1), "move table", &[], None),
         Some(true)
     );
-    update_prefab(&mut instances, &tree, &icons, &textures, &document, table, 32);
+    update_prefab(&mut instances, &tree, &textures, &document, table, 32);
     assert_eq!(instances.live_sprites().last().unwrap().owner, table);
-    assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
 
     assert_eq!(
         document.edit_instances(
@@ -94,20 +92,20 @@ fn equal_layer_turf_priority_follows_moves_type_changes_and_history() {
         ),
         Some(true)
     );
-    update_prefab(&mut instances, &tree, &icons, &textures, &document, table, 32);
+    update_prefab(&mut instances, &tree, &textures, &document, table, 32);
     assert_ne!(instances.live_sprites().last().unwrap().owner, table);
-    assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
 
     for _ in 0..2 {
         let affected = document.undo_with_affected().expect("undo");
-        update_prefabs(&mut instances, &tree, &icons, &textures, &document, &affected, 32);
+        update_prefabs(&mut instances, &tree, &textures, &document, &affected, 32);
         assert_eq!(instances.live_sprites().last().unwrap().owner, table);
-        assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+        assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
     }
     for _ in 0..2 {
         let affected = document.redo_with_affected().expect("redo");
-        update_prefabs(&mut instances, &tree, &icons, &textures, &document, &affected, 32);
-        assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+        update_prefabs(&mut instances, &tree, &textures, &document, &affected, 32);
+        assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
     }
     assert_ne!(instances.live_sprites().last().unwrap().owner, table);
 }
@@ -115,11 +113,10 @@ fn equal_layer_turf_priority_follows_moves_type_changes_and_history() {
 #[test]
 fn toggling_visibility_flags_the_cached_sprites_and_restores_them_exactly() {
     let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 3.0)]);
-    let icons = icons(&["floor", "table"]);
     let textures = textures(&["floor", "table"]);
     let mut document = document(floor_map(24, 24, 2));
     let tables = [(3, 3), (20, 7)].map(|(x, y)| place(&mut document, Coord::new(x, y, 1), "/obj/table"));
-    let mut instances = build(&tree, &icons, &textures, &document, 32);
+    let mut instances = build(&tree, &textures, &document, 32);
     let original = instances.sprites.clone();
     let table = tree.id_of(&TreePath::parse("/obj/table")).unwrap();
     let mut visibility = TypeVisibility::default();
@@ -138,7 +135,6 @@ fn toggling_visibility_flags_the_cached_sprites_and_restores_them_exactly() {
     }
     let rebuilt = build_with_options(
         &tree,
-        &icons,
         &textures,
         &document,
         FrameRenderOptions {
@@ -167,20 +163,19 @@ fn toggling_visibility_flags_the_cached_sprites_and_restores_them_exactly() {
 #[test]
 fn pages_follow_placements_overflow_removals_and_undo() {
     let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 2.0)]);
-    let icons = icons(&["floor", "table"]);
     let textures = textures(&["floor", "table"]);
     let mut document = document(floor_map(24, 24, 2));
-    let mut instances = build(&tree, &icons, &textures, &document, 32);
+    let mut instances = build(&tree, &textures, &document, 32);
 
     // every table sorts into the same page, so this runs it out of spare slots
     for x in 1..=24 {
         for y in 1..=5 {
             let table = place(&mut document, Coord::new(x, y, 1), "/obj/table");
-            update_prefab(&mut instances, &tree, &icons, &textures, &document, table, 32);
+            update_prefab(&mut instances, &tree, &textures, &document, table, 32);
         }
     }
 
-    assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
 
     for x in 1..=24 {
         let coord = Coord::new(x, 3, 2);
@@ -188,15 +183,15 @@ fn pages_follow_placements_overflow_removals_and_undo() {
         let mut edit = Edit::new("clear");
         edit.change(&document, coord, Vec::new());
         assert!(document.apply(edit));
-        update_prefabs(&mut instances, &tree, &icons, &textures, &document, &owners, 32);
+        update_prefabs(&mut instances, &tree, &textures, &document, &owners, 32);
     }
 
-    assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
 
     for _ in 0..30 {
         let affected = document.undo_with_affected().expect("undo");
-        update_prefabs(&mut instances, &tree, &icons, &textures, &document, &affected, 32);
+        update_prefabs(&mut instances, &tree, &textures, &document, &affected, 32);
     }
 
-    assert_render_data_matches(&instances, &build(&tree, &icons, &textures, &document, 32));
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
 }
