@@ -36,7 +36,8 @@ use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
 fn usage() -> ExitCode {
     eprintln!(
         "usage: rmdc <tokens|pp|tree|ir|bytecode|eval|bake|map|roundtrip|icon> <file>\nrmdc ir|bytecode <file> \
-         [--entry <proc-path> | --all]\nrmdc eval <file> [--entry <proc-path>]"
+         [--entry <proc-path> | --all]\nrmdc eval <file> [--entry <proc-path>] [--trusted]\nrmdc bake <dme> <map> \
+         [--summary] [--check-edit] [--trusted]\n--trusted lets call_ext and load_ext run native libraries"
     );
 
     ExitCode::FAILURE
@@ -48,33 +49,50 @@ fn main() -> ExitCode {
         return usage();
     };
 
+    let mut args = args.collect::<Vec<_>>();
+    let is_trusted = args.iter().any(|arg| arg == "--trusted");
+    args.retain(|arg| arg != "--trusted");
+    if is_trusted && !matches!(command.as_str(), "eval" | "bake") {
+        return usage();
+    }
+
+    let limits = vm::Limits {
+        external: if is_trusted {
+            vm::ExternalAccess::Trusted
+        } else {
+            vm::ExternalAccess::Blocked
+        },
+        ..vm::Limits::default()
+    };
+
     let result = match command.as_str() {
         "tokens" => dump_tokens(&path),
         "pp" => dump_preprocessed(&path),
         "tree" => dump_tree(&path),
-        "ir" => match parse_entry_selection(args.collect::<Vec<_>>(), true) {
+        "ir" => match parse_entry_selection(args, true) {
             Some(selection) => dump_ir(&path, selection),
             None => return usage(),
         },
-        "bytecode" => match parse_entry_selection(args.collect::<Vec<_>>(), true) {
+        "bytecode" => match parse_entry_selection(args, true) {
             Some(selection) => dump_bytecode(&path, selection),
             None => return usage(),
         },
-        "eval" => match parse_entry_selection(args.collect::<Vec<_>>(), false) {
-            Some(selection) => eval(&path, selection),
+        "eval" => match parse_entry_selection(args, false) {
+            Some(selection) => eval(&path, selection, limits),
             None => return usage(),
         },
-        "bake" => match args.next() {
-            Some(map) => {
-                let flags = args.collect::<Vec<_>>();
+        "bake" => match args.split_first() {
+            Some((map, flags)) => {
                 if flags.iter().any(|flag| flag != "--summary" && flag != "--check-edit") {
                     return usage();
                 }
+
                 bake_map(
                     &path,
-                    Path::new(&map),
+                    Path::new(map),
                     flags.iter().any(|flag| flag == "--summary"),
                     flags.iter().any(|flag| flag == "--check-edit"),
+                    limits,
                 )
             },
             None => return usage(),
@@ -286,7 +304,9 @@ fn resolve_entry(
     }
 }
 
-fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn bake_map(
+    entry: &Path, map_path: &Path, summary: bool, check_edit: bool, limits: vm::Limits,
+) -> Result<(), Box<dyn std::error::Error>> {
     let compile_started = std::time::Instant::now();
     let arena = StrArena::new();
     let preprocessed = preprocessor::Preprocessor::new(&arena).with_baking(true).run(entry)?;
@@ -415,7 +435,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
         profile,
         atoms,
         [map.size.x as i32, map.size.y as i32, map.size.z as i32],
-        vm::Limits::default(),
+        limits,
         icons,
         entry.parent().map(Path::to_path_buf),
         entry
@@ -579,8 +599,8 @@ fn report_bake_output(bake: &mut vm::bake::Bake) {
     }
 }
 
-fn eval(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::error::Error>> {
-    for line in evaluate_file_with(path, selection)? {
+fn eval(path: &Path, selection: EntrySelection, limits: vm::Limits) -> Result<(), Box<dyn std::error::Error>> {
+    for line in evaluate_file_with(path, selection, limits)? {
         println!("{line}");
     }
 
@@ -589,10 +609,12 @@ fn eval(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::error
 
 #[cfg(test)]
 fn evaluate_file(path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    evaluate_file_with(path, EntrySelection::Auto)
+    evaluate_file_with(path, EntrySelection::Auto, vm::Limits::default())
 }
 
-fn evaluate_file_with(path: &Path, selection: EntrySelection) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+fn evaluate_file_with(
+    path: &Path, selection: EntrySelection, limits: vm::Limits,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let arena = StrArena::new();
     let preprocessed = preprocessor::preprocess(&arena, path)?;
     let source_root = source_root(&preprocessed.sources, preprocessed.entry, path);
@@ -631,17 +653,9 @@ fn evaluate_file_with(path: &Path, selection: EntrySelection) -> Result<Vec<Stri
     let mut runtime = vm::Runtime::default();
     runtime.world.root = path.parent().map(Path::to_path_buf);
     let result = if entry.world {
-        runtime.run_world(&tree, &module, entry.proc, Vec::new(), vm::Limits::default())
+        runtime.run_world(&tree, &module, entry.proc, Vec::new(), limits)
     } else {
-        runtime.run(
-            &tree,
-            &module,
-            entry.proc,
-            None,
-            None,
-            Vec::new(),
-            vm::Limits::default(),
-        )
+        runtime.run(&tree, &module, entry.proc, None, None, Vec::new(), limits)
     };
     result.map_err(|fault| {
         let report = fault.format_fault_report(&module, |file| relative_path(&preprocessed.sources, source_root, file));
@@ -952,8 +966,12 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello_world.dm");
 
         assert_eq!(
-            evaluate_file_with(&path, EntrySelection::Explicit(String::from("/proc/main")))
-                .expect("evaluate explicit main"),
+            evaluate_file_with(
+                &path,
+                EntrySelection::Explicit(String::from("/proc/main")),
+                vm::Limits::default()
+            )
+            .expect("evaluate explicit main"),
             vec![String::from("55")]
         );
     }
