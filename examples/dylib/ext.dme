@@ -1,0 +1,11 @@
+// The example environment, baked through a profile that calls example_ext.
+
+// BEGIN_FILE_DIR
+#define FILE_DIR "../env"
+// END_FILE_DIR
+
+// BEGIN_INCLUDE
+#include "../env/test.dm"
+#include "profile.dm"
+#include "../env/test.dmm"
+// END_INCLUDE
