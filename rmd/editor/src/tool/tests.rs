@@ -1,4 +1,5 @@
 use base::{
+    coord::Coord,
     location::Location,
     path::TreePath,
     types::{Value, VarModifiers},
@@ -6,8 +7,9 @@ use base::{
 use std::collections::{HashMap, HashSet};
 
 use dmi::metadata::Dir;
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
 use objtree::VarDecl;
+use prefab::Prefab;
 
 use super::{
     FillError, FillMode, MAX_FILL_TILES, RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation,
@@ -182,7 +184,7 @@ fn place(document: &mut MapDocument, tree: &objtree::ObjectTree, prefab: &Prefab
         world: &World::new(tree),
         prefab: Some(prefab),
         target: None,
-        coord: dmm::Coord::new(1, 1, 1),
+        coord: Coord::new(1, 1, 1),
         anchor: None,
         fill_mode: FillMode::default(),
         custom_fill_boundaries: &[],
@@ -331,7 +333,7 @@ fn objects_append_before_turf_and_area_with_exact_overrides() -> Result<(), &'st
 
     let paths = document
         .map
-        .tile_at(dmm::Coord::new(1, 1, 1))
+        .tile_at(Coord::new(1, 1, 1))
         .unwrap()
         .iter()
         .map(|prefab| prefab.path.to_string())
@@ -352,34 +354,34 @@ fn objects_append_before_turf_and_area_with_exact_overrides() -> Result<(), &'st
 fn turf_and_area_replace_their_category_and_keep_the_first_id() {
     let tree = tree();
     let mut document = map_document(&["/turf/floor", "/turf/wall", "/area/station"]);
-    let turf_id = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[0];
-    let before = document.placed_tile(dmm::Coord::new(1, 1, 1)).unwrap();
+    let turf_id = document.instance_ids_at(Coord::new(1, 1, 1))[0];
+    let before = document.placed_tile(Coord::new(1, 1, 1)).unwrap();
     let action = place(&mut document, &tree, &Prefab::new(TreePath::parse("/turf/wall"))).unwrap();
     assert_eq!(action.picked, Some(turf_id));
     assert_eq!(action.affected.len(), 2);
     document.apply(action.edit);
 
-    let tile = document.map.tile_at(dmm::Coord::new(1, 1, 1)).unwrap();
+    let tile = document.map.tile_at(Coord::new(1, 1, 1)).unwrap();
     assert_eq!(tile.len(), 2);
     assert_eq!(tile[0].path, TreePath::parse("/turf/wall"));
-    assert_eq!(document.instance_ids_at(dmm::Coord::new(1, 1, 1))[0], turf_id);
+    assert_eq!(document.instance_ids_at(Coord::new(1, 1, 1))[0], turf_id);
     assert!(document.undo());
-    assert_eq!(document.placed_tile(dmm::Coord::new(1, 1, 1)).unwrap(), before);
+    assert_eq!(document.placed_tile(Coord::new(1, 1, 1)).unwrap(), before);
 
     let mut document = map_document(&["/obj/table", "/turf/floor", "/area/station"]);
-    let area_id = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[2];
+    let area_id = document.instance_ids_at(Coord::new(1, 1, 1))[2];
     let action = place(&mut document, &tree, &Prefab::new(TreePath::parse("/area/space"))).unwrap();
     assert_eq!(action.picked, Some(area_id));
     document.apply(action.edit);
-    let tile = document.map.tile_at(dmm::Coord::new(1, 1, 1)).unwrap();
+    let tile = document.map.tile_at(Coord::new(1, 1, 1)).unwrap();
     assert_eq!(tile[2].path, TreePath::parse("/area/space"));
-    assert_eq!(document.instance_ids_at(dmm::Coord::new(1, 1, 1))[2], area_id);
+    assert_eq!(document.instance_ids_at(Coord::new(1, 1, 1))[2], area_id);
 }
 
 #[test]
 fn alt_placing_an_object_replaces_only_the_visible_objects() {
     let tree = tree();
-    let coord = dmm::Coord::new(1, 1, 1);
+    let coord = Coord::new(1, 1, 1);
     let mut document = map_document(&["/obj/table", "/obj/chair", "/obj/sign", "/turf/floor", "/area/station"]);
     let hidden = [TreePath::parse("/obj/sign")].into_iter().collect::<HiddenTypes>();
     let removed = document.instance_ids_at(coord)[..2].to_vec();
@@ -420,7 +422,7 @@ fn identical_category_replacement_is_a_noop_and_datums_are_rejected() {
 #[test]
 fn delete_removes_only_the_target_and_undo_restores_its_id() {
     let tree = tree();
-    let coord = dmm::Coord::new(1, 1, 1);
+    let coord = Coord::new(1, 1, 1);
     let mut document = map_document(&["/obj/table", "/turf/floor", "/area/station"]);
     let target = document.instance_ids_at(coord)[0];
     document.pick_instance(Some(target));

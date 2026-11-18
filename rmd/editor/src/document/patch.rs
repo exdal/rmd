@@ -1,5 +1,7 @@
-use dmm::{Coord, Map, Prefab, Size, Tile, parser, writer};
+use base::coord::Coord;
+use dmm::{Map, Size, Tile, parser, writer};
 use net::LevelContents;
+use prefab::Prefab;
 
 use crate::document::grid::{Grid, LevelCells};
 
@@ -17,19 +19,19 @@ pub fn encode(map: &Grid, coords: impl IntoIterator<Item = Coord>) -> Option<(Ve
         return None;
     }
 
-    let patch = write_row(tiles.iter().map(|(_, tile)| tile.as_slice()));
+    let patch = write_row(tiles.iter().map(|(_, tile)| tile.to_tile()));
 
     Some((tiles.into_iter().map(|(coord, _)| coord).collect(), patch))
 }
 
 pub fn encode_tile(tile: &[Prefab]) -> String {
-    write_row([tile])
+    write_row([tile.to_vec()])
 }
 
 pub fn encode_level(level: &LevelCells) -> LevelContents {
     match level.fill() {
         Some(tile) => LevelContents::Fill(encode_tile(tile)),
-        None => LevelContents::Tiles(write_row(level.tiles().map(Vec::as_slice))),
+        None => LevelContents::Tiles(write_row(level.tiles().cloned())),
     }
 }
 
@@ -48,7 +50,7 @@ pub fn decode_level(map: &mut Grid, contents: &LevelContents) -> LevelCells {
     })
 }
 
-fn write_row<'a>(tiles: impl IntoIterator<Item = &'a [Prefab]>) -> String {
+fn write_row(tiles: impl IntoIterator<Item = Tile>) -> String {
     let tiles = tiles.into_iter().collect::<Vec<_>>();
     let mut patch = Map::new(Size {
         x: tiles.len() as u32,
@@ -57,7 +59,7 @@ fn write_row<'a>(tiles: impl IntoIterator<Item = &'a [Prefab]>) -> String {
     });
 
     for (index, tile) in tiles.into_iter().enumerate() {
-        patch.grid[0][0][index] = patch.intern_tile(tile.to_vec());
+        patch.grid[0][0][index] = patch.intern_tile(tile);
     }
 
     writer::write(&patch)

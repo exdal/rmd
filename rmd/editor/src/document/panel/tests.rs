@@ -1,9 +1,10 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::{error::Error, path::PathBuf};
 
 use dear_imgui_rs::Key;
-use dmm::{Coord, Map, MapFormat, Prefab, Size};
+use dmm::{Map, MapFormat, Size};
 use net::LevelContents;
+use prefab::Prefab;
 use ui::testing::{CONTEXT_LOCK, rectangle_context};
 
 use super::{
@@ -12,7 +13,7 @@ use super::{
     draw_new_map_dialog, draw_resize_map_dialog, resolve_new_map_path,
 };
 use crate::{
-    document::{MapDocument, patch},
+    document::{MapDocument, grid::TileView, patch},
     frontend::fixtures::click_dialog_button,
     session::Session,
     testing::TempDir,
@@ -51,7 +52,7 @@ fn enter_creates_a_z_level_filled_with_the_default_turf_and_area() {
     assert_eq!(session.level_count(), 2);
     assert_eq!(
         session.map().unwrap().tile_at(Coord::new(2, 1, 2)),
-        session.default_fill().ok().as_ref()
+        session.default_fill().ok().as_ref().map(TileView::from)
     );
 }
 
@@ -250,8 +251,12 @@ fn the_resize_dialog_accepts_dimensions_above_255() {
             }
         );
         assert_eq!(
-            session.map().unwrap().tile_at(Coord::new(width, height, 1)),
-            Some(&fill)
+            session
+                .map()
+                .unwrap()
+                .tile_at(Coord::new(width, height, 1))
+                .map(TileView::to_tile),
+            Some(fill.clone())
         );
     }
 }
@@ -337,7 +342,13 @@ fn the_new_map_dialog_accepts_dimensions_above_255() {
                 z: levels,
             }
         );
-        assert_eq!(document.map.tile_at(Coord::new(width, height, levels)), Some(&fill));
+        assert_eq!(
+            document
+                .map
+                .tile_at(Coord::new(width, height, levels))
+                .map(TileView::to_tile),
+            Some(fill.clone())
+        );
     }
 }
 

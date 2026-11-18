@@ -1,7 +1,7 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 use std::sync::Arc;
 
-use dmm::{Coord, Prefab};
+use prefab::Prefab;
 
 use crate::{
     environment::{progress::Progress, session::build_textures},

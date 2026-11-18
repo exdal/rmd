@@ -1,11 +1,11 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
 use dmi::metadata::Dir;
-use dmm::{Coord, Prefab};
+use prefab::{Prefab, PrefabInstanceId};
 
 use super::EditScope;
 use crate::{
-    document::{PrefabInstanceId, command::EditGroupId, instance::InstanceChange, instance::VarMutation},
+    document::{command::EditGroupId, instance::InstanceChange, instance::VarMutation},
     session::{
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session},
@@ -608,7 +608,7 @@ fn a_peers_nudge_draws_in_the_order_of_a_clean_build() {
     let (mut session, _, table) = tables_north_and_south();
     let id = session.state.active().unwrap();
     let north = Coord::new(1, 2, 1);
-    let mut north_tile = session.map().unwrap().tile_at(north).unwrap().clone();
+    let mut north_tile = session.map().unwrap().tile_at(north).unwrap().to_tile();
     // its instance comes back new, and must still draw under the south table
     let nudged = north_tile.iter_mut().find(|prefab| **prefab == table).unwrap();
     nudged.set_var("pixel_y".into(), Value::Num(-16.0));

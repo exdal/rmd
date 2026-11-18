@@ -1,14 +1,14 @@
 pub(crate) mod panel;
 pub(crate) mod session;
 
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::collections::BTreeMap;
 
-use dmm::{Coord, Prefab};
 use objtree::ObjectTree;
+use prefab::{Prefab, PrefabInstanceId, PrefabLocation};
 
 use crate::{
-    document::{MapDocument, PrefabInstanceId, command::Edit, instance::PrefabLocation, selection::Selection},
+    document::{MapDocument, command::Edit, selection::Selection},
     environment::world::World,
     tool::{
         ToolEdit,

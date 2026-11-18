@@ -1,9 +1,10 @@
-use dmm::Coord;
+use base::coord::Coord;
 use objtree::{Roots, TypeId};
+use prefab::PrefabInstanceId;
 
 use crate::session::Session;
 use crate::{
-    document::{DocumentId, PrefabInstanceId},
+    document::DocumentId,
     focus::AreaFocus,
     frame::{self},
 };
@@ -107,11 +108,10 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use base::path::TreePath;
-
-    use dmm::Coord;
+    use base::{coord::Coord, path::TreePath};
 
     use crate::{
+        document::grid::TileView,
         session::fixtures::{area_at, focus_session},
         tool::Tool,
     };
@@ -155,12 +155,15 @@ mod tests {
             .unwrap()
             .id_of(&TreePath::parse("/obj/structure/table"))
             .unwrap();
-        let outside_before = session.map().unwrap().tile_at(outside).unwrap().clone();
+        let outside_before = session.map().unwrap().tile_at(outside).unwrap().to_tile();
 
         assert!(session.choose_type(table));
         session.toggle_focus_at(Some(inside));
         assert_eq!(session.place_at(outside, None), None);
-        assert_eq!(session.map().unwrap().tile_at(outside), Some(&outside_before));
+        assert_eq!(
+            session.map().unwrap().tile_at(outside).map(TileView::to_tile),
+            Some(outside_before.clone())
+        );
         assert!(session.place_at(inside, None).is_some());
     }
 
@@ -175,12 +178,15 @@ mod tests {
 
         let outside_target = session.state.active_document().unwrap().instance_ids_at(outside)[0];
         let inside_target = session.state.active_document().unwrap().instance_ids_at(inside)[0];
-        let outside_before = session.map().unwrap().tile_at(outside).unwrap().clone();
+        let outside_before = session.map().unwrap().tile_at(outside).unwrap().to_tile();
 
         session.set_tool(Tool::Delete);
         assert!(!session.delete_instance(outside_target));
         assert!(session.delete_instance(inside_target));
-        assert_eq!(session.map().unwrap().tile_at(outside), Some(&outside_before));
+        assert_eq!(
+            session.map().unwrap().tile_at(outside).map(TileView::to_tile),
+            Some(outside_before.clone())
+        );
         assert_eq!(
             session
                 .state

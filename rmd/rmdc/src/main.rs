@@ -16,6 +16,7 @@
 
 use base::{
     arena::StrArena,
+    coord::Coord,
     file_path,
     location::{FileId, Location},
     path::TreePath,
@@ -360,7 +361,7 @@ fn bake_map(entry: &Path, map_path: &Path, summary: bool, check_edit: bool) -> R
     for z in 1..=map.size.z {
         for y in 1..=map.size.y {
             for x in 1..=map.size.x {
-                if let Some(tile) = map.tile_at(dmm::Coord::new(x, y, z)) {
+                if let Some(tile) = map.tile_at(Coord::new(x, y, z)) {
                     for prefab in tile {
                         instance += 1;
                         if let Some(ty) = tree.id_of(&prefab.path) {

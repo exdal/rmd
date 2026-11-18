@@ -1,0 +1,13 @@
+[package]
+name = "prefab"
+version = "1.0.0"
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+base.workspace = true
+
+[lints]
+workspace = true

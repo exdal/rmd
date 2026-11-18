@@ -1,15 +1,15 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use dmm::{
-    Coord, Prefab, Tile,
-    merge::{TileConflict, tiles_equal},
-};
+use base::coord::Coord;
+use dmm::{Tile, merge::TileConflict, tiles_equal};
+use prefab::Prefab;
 
 use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},
     document::{
         MapDocument,
         command::{Edit, EditGroupId, History},
+        grid::TileView,
     },
     git::repo::Operation,
 };
@@ -80,7 +80,7 @@ pub struct ConflictState {
     revision: u64,
 }
 
-pub fn describe_tile(tile: Option<&Tile>) -> String {
+pub fn describe_tile(tile: Option<TileView<'_>>) -> String {
     match tile {
         None => String::from("(outside the map)"),
         Some(tile) if tile.is_empty() => String::from("(empty)"),
@@ -369,9 +369,10 @@ impl ConflictState {
 
 #[cfg(test)]
 mod tests {
-    use base::path::TreePath;
+    use base::{coord::Coord, path::TreePath};
 
-    use dmm::{Coord, Map, Prefab, Size, merge::TileConflict};
+    use dmm::{Map, Size, merge::TileConflict};
+    use prefab::Prefab;
 
     use super::{ConflictData, ConflictState, Side};
     use crate::document::{MapDocument, command::EditGroupId};

@@ -1,3 +1,4 @@
+use prefab::Prefab;
 use std::{path::Path, sync::Arc};
 
 use crate::{
@@ -16,8 +17,8 @@ pub struct EditorState {
     documents: Vec<MapDocument>,
     active: Option<DocumentId>,
     pub tool: Tool,
-    pub palette: Option<dmm::Prefab>,
-    recent_prefabs: Vec<dmm::Prefab>,
+    pub palette: Option<Prefab>,
+    recent_prefabs: Vec<Prefab>,
     clipboard: Option<TileRegion>,
     stash: Stash,
 }
@@ -175,11 +176,11 @@ impl EditorState {
         self.clipboard = Some(region);
     }
 
-    pub fn recent_prefabs(&self) -> &[dmm::Prefab] {
+    pub fn recent_prefabs(&self) -> &[Prefab] {
         &self.recent_prefabs
     }
 
-    pub fn choose_prefab(&mut self, prefab: dmm::Prefab) {
+    pub fn choose_prefab(&mut self, prefab: Prefab) {
         if let Some(index) = self.recent_prefabs.iter().position(|recent| recent == &prefab) {
             self.recent_prefabs.remove(index);
         }
@@ -199,7 +200,7 @@ impl EditorState {
         true
     }
 
-    pub fn replace_palette(&mut self, prefab: dmm::Prefab) -> bool {
+    pub fn replace_palette(&mut self, prefab: Prefab) -> bool {
         let Some(previous) = self.palette.as_ref() else {
             return false;
         };
@@ -219,7 +220,8 @@ impl EditorState {
 
 #[cfg(test)]
 mod tests {
-    use base::{path::TreePath, types::Value};
+    use base::{coord::Coord, path::TreePath, types::Value};
+    use prefab::Prefab;
     use std::path::Path;
 
     use super::{EditorState, RECENT_PREFAB_CAPACITY};
@@ -232,13 +234,13 @@ mod tests {
 
     fn region() -> TileRegion {
         let mut map = dmm::Map::new(dmm::Size { x: 2, y: 2, z: 1 });
-        let key = map.intern_tile(vec![dmm::Prefab::new(TreePath::parse("/turf/open/floor"))]);
+        let key = map.intern_tile(vec![Prefab::new(TreePath::parse("/turf/open/floor"))]);
         for row in &mut map.grid[0] {
             row.fill(key);
         }
 
         let document = MapDocument::new(map, 1);
-        let selection = Selection::from_drag(dmm::Coord::new(1, 1, 1), dmm::Coord::new(2, 2, 1));
+        let selection = Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 2, 1));
 
         copy_region(
             (&document.map).into(),
@@ -348,14 +350,14 @@ mod tests {
     fn recent_prefabs_are_exact_deduplicated_and_bounded() {
         let mut state = EditorState::new();
         for index in 0..RECENT_PREFAB_CAPACITY + 2 {
-            state.choose_prefab(dmm::Prefab::new(TreePath::parse(&format!("/obj/item/{index}"))));
+            state.choose_prefab(Prefab::new(TreePath::parse(&format!("/obj/item/{index}"))));
         }
 
         assert_eq!(state.recent_prefabs().len(), RECENT_PREFAB_CAPACITY);
         assert_eq!(state.recent_prefabs()[0].path, TreePath::parse("/obj/item/11"));
         assert_eq!(state.recent_prefabs()[9].path, TreePath::parse("/obj/item/2"));
 
-        let mut overridden = dmm::Prefab::new(TreePath::parse("/obj/item/11"));
+        let mut overridden = Prefab::new(TreePath::parse("/obj/item/11"));
         overridden.set_var("name".into(), Value::Text("custom".into()));
         state.choose_prefab(overridden.clone());
 
@@ -367,7 +369,7 @@ mod tests {
     fn choosing_an_old_recent_entry_promotes_it() {
         let mut state = EditorState::new();
         for name in ["one", "two", "three"] {
-            state.choose_prefab(dmm::Prefab::new(TreePath::parse(&format!("/obj/{name}"))));
+            state.choose_prefab(Prefab::new(TreePath::parse(&format!("/obj/{name}"))));
         }
 
         assert!(state.choose_recent(2));
@@ -380,8 +382,8 @@ mod tests {
     #[test]
     fn replacing_the_palette_updates_one_recent_slot() {
         let mut state = EditorState::new();
-        let older = dmm::Prefab::new(TreePath::parse("/obj/older"));
-        let current = dmm::Prefab::new(TreePath::parse("/obj/current"));
+        let older = Prefab::new(TreePath::parse("/obj/older"));
+        let current = Prefab::new(TreePath::parse("/obj/current"));
         let mut rotated = current.clone();
         rotated.set_var("dir".into(), Value::Num(4.0));
         state.choose_prefab(older.clone());

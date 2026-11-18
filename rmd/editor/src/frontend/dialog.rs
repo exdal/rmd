@@ -1,7 +1,7 @@
 use std::path::Path;
 
+use base::coord::Coord;
 use dear_imgui_rs::{Ui, WindowFlags};
-use dmm::Coord;
 use ui::widgets::{DialogButton, begin_centered_modal, dialog_buttons};
 
 use super::{OpenRequest, UiState, VisibleMapView, menu::MenuActions};

@@ -1,6 +1,6 @@
-use base::location::Location;
+use base::{coord::Coord, location::Location};
 
-use dmm::{Coord, Prefab};
+use prefab::Prefab;
 
 use super::*;
 use crate::{

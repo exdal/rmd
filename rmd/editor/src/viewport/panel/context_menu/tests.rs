@@ -1,9 +1,10 @@
-use base::{location::Location, path::TreePath, types::Value};
+use base::{coord::Coord, location::Location, path::TreePath, types::Value};
 use std::path::PathBuf;
 
 use dear_imgui_rs::{Condition, sys};
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
 use objtree::ObjectTree;
+use prefab::Prefab;
 use ui::testing::{CONTEXT_LOCK, rectangle_context};
 
 use super::{POPUP, Target, draw_popup};

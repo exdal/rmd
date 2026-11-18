@@ -1,9 +1,10 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
-use dmm::{Coord, Map, Prefab, Size, Tile};
+use dmm::{Map, Size, Tile};
+use prefab::Prefab;
 
 use super::{ChangeKind, LineKind, VarChange, Version, diff, restore_edit, tile_lines};
-use crate::document::MapDocument;
+use crate::document::{MapDocument, grid::TileView};
 
 fn tile(paths: &[&str]) -> Tile {
     paths.iter().map(|path| Prefab::new(TreePath::parse(path))).collect()
@@ -102,7 +103,7 @@ fn touching_changes_share_a_hunk() {
 }
 
 fn lines(from: Option<&Tile>, to: Option<&Tile>) -> Vec<(LineKind, String)> {
-    tile_lines(from, to)
+    tile_lines(from.map(TileView::from), to.map(TileView::from))
         .into_iter()
         .map(|line| (line.kind, line.text))
         .collect()
@@ -136,7 +137,7 @@ fn identical_tiles_are_all_kept() {
     let old = tile(&["/turf/floor", "/obj/table"]);
 
     assert!(
-        tile_lines(Some(&old), Some(&old))
+        tile_lines(Some(TileView::from(&old)), Some(TileView::from(&old)))
             .iter()
             .all(|line| line.kind == LineKind::Kept)
     );
@@ -149,7 +150,7 @@ fn same_path_with_changed_vars_is_one_modified_line() {
     let mut new = tile(&["/turf/floor"]);
     new.push(door(4.0));
 
-    let result = tile_lines(Some(&old), Some(&new));
+    let result = tile_lines(Some(TileView::from(&old)), Some(TileView::from(&new)));
 
     assert_eq!(result.len(), 2);
     assert_eq!(result[1].kind, LineKind::Modified);
@@ -169,16 +170,16 @@ fn a_missing_side_is_all_added_or_all_removed() {
     let old = tile(&["/turf/floor", "/obj/table"]);
 
     assert!(
-        tile_lines(None, Some(&old))
+        tile_lines(None, Some(TileView::from(&old)))
             .iter()
             .all(|line| line.kind == LineKind::Added)
     );
     assert!(
-        tile_lines(Some(&old), None)
+        tile_lines(Some(TileView::from(&old)), None)
             .iter()
             .all(|line| line.kind == LineKind::Removed)
     );
-    assert_eq!(tile_lines(Some(&old), None).len(), 2);
+    assert_eq!(tile_lines(Some(TileView::from(&old)), None).len(), 2);
 }
 
 #[test]

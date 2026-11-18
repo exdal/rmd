@@ -36,20 +36,6 @@ fn direction_name(direction: Dir) -> &'static str {
     }
 }
 
-pub(super) fn direction_choices(
-    count: usize, declared: Option<[bool; 8]>, directional_types: Option<DirectionalTypes>,
-) -> Vec<Dir> {
-    if let Some(supported) = directional_types.map(|types| types.supported).or(declared) {
-        return Dir::ORDER
-            .into_iter()
-            .zip(supported)
-            .filter_map(|(direction, supported)| supported.then_some(direction))
-            .collect();
-    }
-
-    Dir::ORDER.into_iter().take(count).collect()
-}
-
 pub(super) fn selected_direction(bits: u32, directional_types: Option<DirectionalTypes>) -> Option<Dir> {
     directional_types
         .and_then(|types| types.current)

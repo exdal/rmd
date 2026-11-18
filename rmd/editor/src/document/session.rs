@@ -4,7 +4,8 @@ use std::{
 };
 
 use base::path::TreePath;
-use dmm::{Map, MapFormat, Prefab, Size};
+use dmm::{Map, MapFormat, Size};
+use prefab::Prefab;
 
 use crate::git::session::GitDocState;
 use crate::{coop::LevelStep, session::Session, tool::session::is_reorder_label};
@@ -208,16 +209,25 @@ impl Session {
             return Vec::new();
         };
 
-        let mut prefabs = Vec::new();
-        for instance in document.prefab_instances() {
-            let prefab = instance.prefab();
-            if prefab.path == *path && !prefabs.contains(prefab) {
-                prefabs.push(prefab.clone());
-            }
-        }
-
-        prefabs.sort_by_key(|prefab| prefab.vars.len());
+        let mut prefabs = document.map.prefabs_of(path).cloned().collect::<Vec<_>>();
+        prefabs.sort_by_cached_key(|prefab| (!document.map.is_placed(prefab), prefab.vars.len()));
         prefabs
+    }
+
+    pub fn is_prefab_placed(&self, id: DocumentId, prefab: &Prefab) -> bool {
+        self.state
+            .document(id)
+            .is_some_and(|document| document.map.is_placed(prefab))
+    }
+
+    pub fn pin_prefabs(&mut self, id: DocumentId, prefabs: &[Prefab]) {
+        let Some(document) = self.state.document_mut(id) else {
+            return;
+        };
+
+        for prefab in prefabs {
+            document.map.pin(prefab);
+        }
     }
 
     pub fn map_path(&self) -> Option<&Path> {

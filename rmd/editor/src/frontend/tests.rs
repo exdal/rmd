@@ -1,8 +1,9 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::{cell::Cell, path::PathBuf};
 
 use dear_imgui_rs::DockLayout;
-use dmm::{Prefab, Size};
+use dmm::Size;
+use prefab::Prefab;
 use ui::{
     keybind::KeyBinding,
     testing::{CONTEXT_LOCK, rectangle_context},
@@ -839,8 +840,7 @@ fn stash_region(session: &mut Session) -> crate::document::DocumentId {
     }
 
     let document = crate::document::MapDocument::new(map, 1);
-    let selection =
-        crate::document::selection::Selection::from_drag(dmm::Coord::new(1, 1, 1), dmm::Coord::new(2, 2, 1));
+    let selection = crate::document::selection::Selection::from_drag(Coord::new(1, 1, 1), Coord::new(2, 2, 1));
     let region = crate::clipboard::copy_region(
         (&document.map).into(),
         selection,

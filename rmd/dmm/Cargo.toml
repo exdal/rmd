@@ -8,6 +8,7 @@ path = "src/lib.rs"
 
 [dependencies]
 base.workspace = true
+prefab.workspace = true
 
 [lints]
 workspace = true

@@ -5,17 +5,17 @@ pub(crate) mod selection;
 pub(crate) mod session;
 pub(crate) mod transform;
 
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 
-use dmm::{Coord, Prefab};
 use objtree::ObjectTree;
+use prefab::{Prefab, PrefabInstanceId};
 use ui::icons::materialdesignicons::{
     ICON_ARROW_ALL, ICON_COMMENT_TEXT_OUTLINE, ICON_ERASER, ICON_EYEDROPPER, ICON_FIND_REPLACE, ICON_FORMAT_COLOR_FILL,
     ICON_PENCIL, ICON_SELECT_DRAG, ICON_TEXTURE, ICON_VECTOR_POLYLINE,
 };
 
 use crate::{
-    document::{MapDocument, PrefabInstanceId, command::Edit, selection::Selection},
+    document::{MapDocument, command::Edit, selection::Selection},
     environment::world::World,
 };
 

@@ -5,14 +5,14 @@ use std::{
     sync::Arc,
 };
 
-use dmm::Prefab;
 use objtree::TypeId;
+use prefab::{Prefab, PrefabInstanceId};
 use render::{FrameUpdate, texture::TextureCatalog};
 
 use crate::{
     bake::worker::Baker,
     coop::Coop,
-    document::{DocumentId, PrefabInstanceId, state::EditorState},
+    document::{DocumentId, state::EditorState},
     frame::{
         FrameInstances,
         options::{FrameOptions, TypeVisibility},

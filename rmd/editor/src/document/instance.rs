@@ -1,32 +1,10 @@
 use base::{
+    coord::Coord,
     path::TreePath,
     types::{Identifier, Value},
 };
 
-use dmm::{Coord, Prefab, PrefabInstanceId};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PrefabLocation {
-    pub coord: Coord,
-    pub prefab_index: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PrefabInstance<'a> {
-    pub id: PrefabInstanceId,
-    pub location: PrefabLocation,
-    prefab: &'a Prefab,
-}
-
-impl<'a> PrefabInstance<'a> {
-    pub(crate) fn new(id: PrefabInstanceId, prefab: &'a Prefab, location: PrefabLocation) -> Self {
-        Self { id, location, prefab }
-    }
-
-    pub fn prefab(&self) -> &'a Prefab {
-        self.prefab
-    }
-}
+use prefab::{Prefab, PrefabInstanceId};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacedPrefab {

@@ -1,5 +1,6 @@
-use dmm::{Coord, Prefab};
+use base::coord::Coord;
 use net::{LevelChange, LevelContents};
+use prefab::Prefab;
 
 use super::{
     MapDocument, command,

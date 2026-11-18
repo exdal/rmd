@@ -1,4 +1,4 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::{
     env, fs,
     net::{Ipv4Addr, SocketAddr},
@@ -7,15 +7,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dmm::{Coord, Prefab, parser};
+use dmm::parser;
 use net::{
     CodebaseHash, CodebaseId, Cursor, DeleteLevel, Direction, Event, GenerationId, Impairment, InsertAt, InsertLevel,
     LevelContents, LevelOp, LossyProxy, PeerId, PeerInfo, SeqId, Server, ServerConfig, View,
 };
+use prefab::Prefab;
 
 use super::*;
 use crate::{
-    document::{DocumentId, command::Edit},
+    document::{DocumentId, command::Edit, grid::TileView},
     environment::worker::LoadedMap,
     session::{Session, fixtures},
     testing::PASSWORD,
@@ -172,7 +173,7 @@ fn width_on_disk(file: &Path) -> u32 {
 fn paint(session: &mut Session, file: &Path, coord: Coord, path: &str) {
     let id = session.state.document_for_path(file).unwrap();
     let document = session.state.document_mut(id).unwrap();
-    let mut tile = document.map.tile_at(coord).cloned().unwrap();
+    let mut tile = document.map.tile_at(coord).map(TileView::to_tile).unwrap();
     tile.insert(0, Prefab::new(TreePath::parse(path)));
 
     let placed = tile.into_iter().map(|prefab| document.instantiate(prefab)).collect();

@@ -1,7 +1,8 @@
+use base::coord::Coord;
 use dear_imgui_rs::{
     ItemHoveredFlags, ListClipper, SelectableFlags, TableColumnFlags, TableFlags, TableSizingPolicy, Ui,
 };
-use dmm::{Coord, merge::TileConflict};
+use dmm::merge::TileConflict;
 use ui::{
     icons::materialdesignicons::ICON_CHECK,
     widgets::{
@@ -11,7 +12,7 @@ use ui::{
 };
 
 use crate::{
-    document::DocumentId,
+    document::{DocumentId, grid::TileView},
     git::{
         conflict::{
             ConflictRow, ConflictState, OURS_COLOR, OURS_LABEL, Side, THEIRS_COLOR, UNRESOLVED_COLOR, describe_tile,
@@ -221,7 +222,7 @@ fn draw_conflict_details(
 
     ui.table_next_column();
     if let Some(conflict) = conflict {
-        let base = describe_tile(conflict.base.as_ref()).replace('\n', ", ");
+        let base = describe_tile(conflict.base.as_ref().map(TileView::from)).replace('\n', ", ");
         ui.text_disabled(&base);
         ui.set_item_tooltip(&base);
     }

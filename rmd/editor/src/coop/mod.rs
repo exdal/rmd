@@ -7,7 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dmm::{Coord, error::MapError};
+use base::coord::Coord;
+use dmm::error::MapError;
 use net::{
     Client, CodebaseId, Comment, CommentId, Cursor, GenerationId, InsertAt, InsertLevel, LevelLog, LevelOp, MapEdit,
     PRESENCE_REFRESH, PasswordHash, PeerId, PeerInfo, Selection, SeqId, Server, View,

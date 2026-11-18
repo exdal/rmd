@@ -1,5 +1,5 @@
+use base::coord::Coord;
 use dear_imgui_rs::{MouseCursor, Ui};
-use dmm::Coord;
 use ui::widgets::dpi;
 
 use super::{

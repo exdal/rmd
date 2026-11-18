@@ -3,13 +3,14 @@ pub(crate) mod session;
 
 use std::collections::{HashMap, HashSet};
 
-use dmm::{Coord, Prefab, Tile};
+use base::coord::Coord;
+use dmm::Tile;
 use objtree::ObjectTree;
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::{
     document::{
-        MapDocument, PrefabInstanceId, command::Edit, instance::PlacedPrefab, instance::PlacedTile,
-        selection::Selection,
+        MapDocument, command::Edit, grid::TileView, instance::PlacedPrefab, instance::PlacedTile, selection::Selection,
     },
     environment::world::{BaseTile, World},
     frame::options::HiddenTypes,
@@ -370,14 +371,14 @@ pub fn clear_region(
     })
 }
 
-pub fn can_clear(world: &World, tile: &Tile, hidden: &HiddenTypes) -> bool {
+pub fn can_clear(world: &World, tile: TileView<'_>, hidden: &HiddenTypes) -> bool {
     world
         .base_tile
         .as_ref()
         .is_some_and(|base_tile| clears_anything(tile, hidden, base_tile))
 }
 
-fn clears_anything(tile: &[Prefab], hidden: &HiddenTypes, base_tile: &BaseTile) -> bool {
+fn clears_anything(tile: TileView<'_>, hidden: &HiddenTypes, base_tile: &BaseTile) -> bool {
     tile.iter()
         .any(|prefab| !hidden.hides(prefab) && !is_base(prefab, base_tile))
 }

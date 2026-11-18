@@ -1,6 +1,7 @@
+use base::coord::Coord;
 use dear_imgui_rs::{MouseButton, MouseCursor, Ui};
 use dmi::metadata::Dir;
-use dmm::{Coord, Size};
+use dmm::Size;
 use ui::widgets::dpi;
 
 use self::{

@@ -1,7 +1,8 @@
-use base::types::Value;
+use base::{coord::Coord, types::Value};
 use std::{error::Error, fs, sync::Arc};
 
-use dmm::{Coord, Map, Prefab, Size, writer};
+use dmm::{Map, Size, writer};
+use prefab::Prefab;
 
 use crate::{
     document::DocumentId,

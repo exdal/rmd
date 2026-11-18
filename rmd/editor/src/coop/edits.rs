@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, mem};
 
-use dmm::{Coord, Prefab};
+use base::coord::Coord;
 use net::{DeleteLevel, InsertAt, InsertLevel, LevelChange, LevelOp, MapEdit, SeqId};
+use prefab::Prefab;
 
 use super::{LevelRequest, LevelStep};
 use crate::{

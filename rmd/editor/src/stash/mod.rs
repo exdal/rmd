@@ -1,7 +1,8 @@
 pub(crate) mod panel;
 pub(crate) mod session;
 
-use dmm::{Coord, Map, Size};
+use base::coord::Coord;
+use dmm::{Map, Size};
 
 use crate::{
     clipboard::TileRegion,

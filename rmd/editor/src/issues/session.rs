@@ -1,13 +1,9 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
+use prefab::PrefabInstanceId;
 use std::{cell::Ref, collections::BTreeMap, sync::Arc};
 
-use dmm::Coord;
-
 use crate::session::Session;
-use crate::{
-    document::{DocumentId, PrefabInstanceId},
-    issues,
-};
+use crate::{document::DocumentId, issues};
 
 #[derive(Debug)]
 pub(crate) struct MapIssueGroup {

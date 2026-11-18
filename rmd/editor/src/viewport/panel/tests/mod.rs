@@ -1,4 +1,4 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::{
     path::PathBuf,
     thread,
@@ -6,7 +6,8 @@ use std::{
 };
 
 use dear_imgui_rs::{Condition, DockLayout, Key, MouseButton};
-use dmm::{Coord, Prefab, PrefabInstanceId, Size};
+use dmm::Size;
+use prefab::{Prefab, PrefabInstanceId};
 use render::{HighlightStyle, InteractionMode, MapViewInteraction, MapViewRect, PickRequest, PlacementFlash};
 use ui::{
     keybind::KeyBinding,

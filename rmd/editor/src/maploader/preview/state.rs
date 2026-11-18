@@ -3,7 +3,9 @@ use std::{
     path::Path,
 };
 
-use dmm::{Coord, PrefabInstanceId, Size};
+use base::coord::Coord;
+use dmm::Size;
+use prefab::PrefabInstanceId;
 
 use super::{
     ComposeContext, MapView, ModuleChoices, ModuleOverlay, ModuleRootKey, PreviewIdAllocator, compose::update,

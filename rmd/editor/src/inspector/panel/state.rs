@@ -1,4 +1,5 @@
 use base::types::{Identifier, Value};
+use prefab::PrefabInstanceId;
 use std::collections::{HashMap, HashSet};
 
 use dear_imgui_rs::Ui;
@@ -6,7 +7,7 @@ use ui::{icons::materialdesignicons::ICON_CIRCLE_SMALL, widgets::checkbox_width}
 
 use crate::{
     app::external_editor::SourceLocation,
-    document::{PrefabInstanceId, command::EditGroupId},
+    document::command::EditGroupId,
     git::{
         blame::{self, BlameCell},
         panel::commit_summary,

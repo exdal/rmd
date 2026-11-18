@@ -1,12 +1,13 @@
 use std::{iter, ptr};
 
 use dear_imgui_rs::{Ui, sys};
-use dmm::Prefab;
+use prefab::{Prefab, prefabs_equal};
 use ui::widgets::dpi;
 
 use crate::{
     document::DocumentId,
     palette::panel::thumbnail::{IconOrigin, draw_thumbnail},
+    search::panel::{FindPanel, SimilarMatchKind},
     session::Session,
     settings::{Settings, keybind::KeybindAction},
     viewport::{panel::context_menu::begin_map_popup, preview::PlacementPreview},
@@ -16,7 +17,13 @@ const POPUP: &str = "Prefab variants##prefab-variants";
 const ROW_HEIGHT: f32 = 64.0;
 const VISIBLE_ROWS: usize = 6;
 const MAX_WIDTH: f32 = 480.0;
-const EMPTY_TEXT: &str = "No instances in this map";
+
+enum RowAction<'a> {
+    Choose(&'a Prefab),
+    Search(&'a Prefab, SimilarMatchKind),
+    GenerateDirections(usize),
+    GenerateIcons(usize),
+}
 
 struct Row {
     prefab: Prefab,
@@ -24,6 +31,7 @@ struct Row {
     path: String,
     overrides: Vec<String>,
     height: f32,
+    is_generated: bool,
 }
 
 pub(crate) struct PrefabMenu {
@@ -47,29 +55,12 @@ impl PrefabMenu {
             - 1.0
             - style.scrollbar_size())
         .max(1.0);
-        let spacing_y = style.item_spacing()[1];
         let rows = session
             .map_prefabs_of(document, &brush.path)
             .into_iter()
-            .map(|prefab| {
-                let path = prefab.path.to_string();
-                let overrides = override_lines(&prefab);
-                let text_height = iter::once(&path)
-                    .chain(&overrides)
-                    .map(|line| ui.calc_text_size_with_opts(line, false, text_width)[1] + spacing_y)
-                    .sum::<f32>()
-                    - spacing_y;
-
-                Row {
-                    placement: session.prefab_placement(&prefab),
-                    path,
-                    overrides,
-                    height: icon_extent.max(text_height),
-                    prefab,
-                }
-            })
+            .map(|prefab| build_row(ui, session, document, prefab, text_width, icon_extent))
             .collect::<Vec<_>>();
-        let selected = rows.iter().position(|row| row.prefab == brush);
+        let selected = rows.iter().position(|row| prefabs_equal(&row.prefab, &brush));
 
         Some(Self {
             document,
@@ -79,6 +70,54 @@ impl PrefabMenu {
             rows,
             selected,
         })
+    }
+
+    fn insert_variants(&mut self, ui: &Ui, session: &mut Session, index: usize, variants: Vec<Prefab>) {
+        session.pin_prefabs(self.document, &variants);
+        let rows = variants
+            .into_iter()
+            .filter(|prefab| !self.rows.iter().any(|row| prefabs_equal(&row.prefab, prefab)))
+            .map(|prefab| build_row(ui, session, self.document, prefab, self.text_width, self.icon_extent))
+            .collect::<Vec<_>>();
+        let count = rows.len();
+        let at = if self.rows[index].is_generated {
+            index + 1
+        } else {
+            self.rows
+                .iter()
+                .position(|row| row.is_generated)
+                .unwrap_or(self.rows.len())
+        };
+
+        self.rows.splice(at..at, rows);
+
+        if let Some(selected) = &mut self.selected
+            && *selected >= at
+        {
+            *selected += count;
+        }
+    }
+}
+
+fn build_row(
+    ui: &Ui, session: &mut Session, document: DocumentId, prefab: Prefab, text_width: f32, icon_extent: f32,
+) -> Row {
+    let spacing_y = ui.clone_style().item_spacing()[1];
+    let path = prefab.path.to_string();
+    let overrides = override_lines(&prefab);
+    let text_height = iter::once(&path)
+        .chain(&overrides)
+        .map(|line| ui.calc_text_size_with_opts(line, false, text_width)[1] + spacing_y)
+        .sum::<f32>()
+        - spacing_y;
+
+    Row {
+        placement: session.prefab_placement(&prefab),
+        path,
+        overrides,
+        height: icon_extent.max(text_height),
+        is_generated: !session.is_prefab_placed(document, &prefab),
+        prefab,
     }
 }
 
@@ -92,7 +131,7 @@ fn override_lines(prefab: &Prefab) -> Vec<String> {
 
 pub(crate) fn update_prefab_menu(
     ui: &Ui, session: &mut Session, settings: &Settings, document: DocumentId, is_focused: bool,
-    menu: &mut Option<PrefabMenu>,
+    menu: &mut Option<PrefabMenu>, find: &mut FindPanel,
 ) {
     let is_open_requested = settings.keybindings.get(KeybindAction::PrefabVariants).is_pressed(ui)
         && is_focused
@@ -107,7 +146,7 @@ pub(crate) fn update_prefab_menu(
         return;
     }
 
-    let Some(open) = menu.as_ref() else {
+    let Some(open) = menu.as_mut() else {
         return;
     };
 
@@ -129,20 +168,39 @@ pub(crate) fn update_prefab_menu(
         return;
     };
 
-    if let Some(prefab) = draw_rows(ui, open) {
-        session.choose_prefab(prefab.clone());
+    match draw_rows(ui, open) {
+        Some(RowAction::Choose(prefab)) => session.choose_prefab(prefab.clone()),
+        Some(RowAction::Search(prefab, kind)) => {
+            find.open_for_prefab(session, open.document, prefab, kind);
+            ui.close_current_popup();
+        },
+        Some(RowAction::GenerateDirections(index)) => {
+            let variants = session.direction_variants(&open.rows[index].prefab);
+            open.insert_variants(ui, session, index, variants);
+        },
+        Some(RowAction::GenerateIcons(index)) => {
+            let variants = session.icon_state_variants(&open.rows[index].prefab);
+            open.insert_variants(ui, session, index, variants);
+        },
+        None => {},
     }
 }
 
-fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<&'a Prefab> {
+fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<RowAction<'a>> {
     if menu.rows.is_empty() {
-        ui.text_disabled(EMPTY_TEXT);
+        ui.text_disabled("No instances in this map");
         return None;
     }
 
-    let mut chosen = None;
+    let mut action = None;
     for (index, row) in menu.rows.iter().enumerate() {
-        if index > 0 {
+        let is_section_start = row.is_generated
+            && index
+                .checked_sub(1)
+                .is_none_or(|previous| !menu.rows[previous].is_generated);
+        if is_section_start {
+            ui.separator_with_text("Generated");
+        } else if index > 0 {
             ui.separator();
         }
 
@@ -154,7 +212,26 @@ fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<&'a Prefab> {
             .size([0.0, row.height])
             .build()
         {
-            chosen = Some(&row.prefab);
+            action = Some(RowAction::Choose(&row.prefab));
+        }
+
+        if let Some(_menu) = ui.begin_popup_context_item() {
+            if ui.menu_item("Search by Type") {
+                action = Some(RowAction::Search(&row.prefab, SimilarMatchKind::Type));
+            }
+
+            if ui.menu_item("Search by Prefab ID") {
+                action = Some(RowAction::Search(&row.prefab, SimilarMatchKind::Prefab));
+            }
+
+            ui.separator();
+            if ui.menu_item("Generate Directions") {
+                action = Some(RowAction::GenerateDirections(index));
+            }
+
+            if ui.menu_item("Generate Icons") {
+                action = Some(RowAction::GenerateIcons(index));
+            }
         }
 
         if !ui.is_item_visible() {
@@ -175,7 +252,7 @@ fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<&'a Prefab> {
         });
     }
 
-    chosen
+    action
 }
 
 fn draw_icon(ui: &Ui, placement: Option<PlacementPreview>, tile_size: u32, extent: f32, row_height: f32) {

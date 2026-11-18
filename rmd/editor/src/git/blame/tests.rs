@@ -1,4 +1,5 @@
-use dmm::{Coord, parser::parse};
+use base::coord::Coord;
+use dmm::parser::parse;
 
 use super::{
     BlameCell, BlameCounts, MapVersion, UNCOMMITTED, VersionSource, blame, history_window, pending_note, relative_time,

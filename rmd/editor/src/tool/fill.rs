@@ -1,8 +1,8 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::collections::{HashSet, VecDeque};
 
-use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
+use prefab::Prefab;
 
 use crate::document::{MapDocument, command::Edit, grid::Grid};
 

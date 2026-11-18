@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, mem};
 
-use dmm::Coord;
+use base::coord::Coord;
 use net::LevelChange;
 
 use super::command::Edit;

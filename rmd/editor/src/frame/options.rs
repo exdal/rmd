@@ -4,8 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use dmm::Prefab;
 use objtree::{ObjectTree, TypeId};
+use prefab::Prefab;
 use vm::bake::{LightingMap, SharedAppearance};
 
 use crate::environment::world::Perspective;

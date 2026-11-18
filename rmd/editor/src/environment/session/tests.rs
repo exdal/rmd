@@ -1,4 +1,5 @@
 use base::{
+    coord::Coord,
     location::{FileId, Location, Position},
     path::TreePath,
     types::Value,
@@ -8,9 +9,13 @@ use std::{
     sync::Arc,
 };
 
-use dmi::IconFile;
-use dmm::{Coord, Map, MapFormat, Prefab, Size, writer::MapWriter};
+use dmi::{
+    IconFile,
+    metadata::{IconState, Metadata},
+};
+use dmm::{Map, MapFormat, Size, writer::MapWriter};
 use objtree::ObjectTree;
+use prefab::Prefab;
 
 use super::{
     DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS, build_textures, discover_maps, preprocess_severity,
@@ -256,4 +261,68 @@ fn reloading_an_environment_resets_type_visibility() {
     assert!(session.state.active_document().unwrap().is_dirty());
     assert_eq!(session.picked_instance(), Some(picked));
     assert_render_cache_matches_rebuild(&session);
+}
+
+fn icon_session(path: &str, states: &[(&str, bool)]) -> Session {
+    let mut tree = ObjectTree::new();
+    tree.register(&TreePath::parse(path), Location::default());
+    let mut environment = Environment::new(".", tree);
+    environment.icons.insert(
+        String::from("sign.dmi"),
+        Metadata {
+            states: states
+                .iter()
+                .map(|(name, movement)| IconState {
+                    name: name.to_string(),
+                    dirs: 1,
+                    frames: 1,
+                    movement: *movement,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        },
+    );
+    let mut session = Session::new();
+    session.state.environment = Some(Arc::new(environment));
+
+    session
+}
+
+fn with_icon_state(prefab: &Prefab, state: &str) -> Prefab {
+    let mut variant = prefab.clone();
+    variant.set_var("icon_state".into(), Value::Text(state.to_string()));
+
+    variant
+}
+
+#[test]
+fn icon_state_variants_list_each_state_of_the_resolved_icon_once() {
+    let session = icon_session(
+        "/obj/sign",
+        &[("left", false), ("", false), ("right", false), ("left", true)],
+    );
+    let mut prefab = Prefab::new(TreePath::parse("/obj/sign"));
+    prefab.set_var("icon".into(), Value::Resource(String::from("sign.dmi")));
+    prefab.set_var("icon_state".into(), Value::Text(String::from("left")));
+
+    assert_eq!(
+        session.icon_state_variants(&prefab),
+        ["left", "", "right"]
+            .into_iter()
+            .map(|state| with_icon_state(&prefab, state))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn icon_state_variants_are_empty_without_a_known_icon() {
+    let session = icon_session("/obj/sign", &[("left", false)]);
+    let mut prefab = Prefab::new(TreePath::parse("/obj/sign"));
+
+    assert!(session.icon_state_variants(&prefab).is_empty());
+
+    prefab.set_var("icon".into(), Value::Resource(String::from("missing.dmi")));
+
+    assert!(session.icon_state_variants(&prefab).is_empty());
 }

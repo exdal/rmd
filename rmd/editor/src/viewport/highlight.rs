@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use dmm::Coord;
+use base::coord::Coord;
+use prefab::PrefabInstanceId;
 
 use crate::session::{Session, SharedHighlights};
 use crate::{
     bake::{Bake, HIGHLIGHT_ALWAYS, HIGHLIGHT_HOVERED, HIGHLIGHT_SELECTED, Highlight, highlight_tiles},
-    document::{DocumentId, PrefabInstanceId},
+    document::DocumentId,
     git::blame::BlameCell,
 };
 
@@ -172,8 +173,9 @@ mod tests {
     use base::{location::Location, path::TreePath};
     use std::sync::Arc;
 
-    use dmm::{Map, Prefab, Size};
+    use dmm::{Map, Size};
     use objtree::ObjectTree;
+    use prefab::Prefab;
 
     use super::*;
     use crate::{
@@ -290,8 +292,8 @@ mod tests {
         let mut session = unknown_session();
         let id = session.state.active().unwrap();
         assert_eq!(positions(&session), [[1, 1], [2, 1]]);
-        let unknown = session.map().unwrap().tile_at(Coord::new(2, 1, 1)).unwrap().clone();
-        let known = session.map().unwrap().tile_at(Coord::new(3, 1, 1)).unwrap().clone();
+        let unknown = session.map().unwrap().tile_at(Coord::new(2, 1, 1)).unwrap().to_tile();
+        let known = session.map().unwrap().tile_at(Coord::new(3, 1, 1)).unwrap().to_tile();
         assert!(session.apply_remote_tiles(id, vec![(Coord::new(2, 1, 1), known), (Coord::new(3, 1, 1), unknown)]));
         assert_eq!(positions(&session), [[1, 1], [3, 1]]);
         session.apply_codebase(codebase(&["/obj/missing", "/turf/missing"]));

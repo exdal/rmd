@@ -1,3 +1,4 @@
+use prefab::PrefabInstanceId;
 use std::error::Error;
 
 use dear_imgui_rs::sys;
@@ -50,7 +51,7 @@ fn clicking_a_marker_opens_the_popup() -> TestResult {
     Ok(())
 }
 
-fn source_root(app: &RectangleUiHarness) -> Result<dmm::PrefabInstanceId, Box<dyn Error>> {
+fn source_root(app: &RectangleUiHarness) -> Result<PrefabInstanceId, Box<dyn Error>> {
     app.session
         .module_roots()
         .iter()

@@ -1,8 +1,12 @@
-use base::types::{Identifier, Value};
+use base::{
+    coord::Coord,
+    types::{Identifier, Value},
+};
 use dmi::metadata::Dir;
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::{
-    document::{PrefabInstanceId, instance::VarMutation},
+    document::instance::VarMutation,
     gizmo::direction::{DirectionState, DirectionalTypes},
     tool::SelectionRotation,
 };
@@ -27,7 +31,7 @@ fn drag(handle: Handle) -> DragState {
             id: picked(),
             start_values: [5, -3],
             start_anchor: [45.0, 29.0],
-            start_coord: dmm::Coord::new(2, 1, 1),
+            start_coord: Coord::new(2, 1, 1),
         }],
         start_group_anchor: [45.0, 29.0],
         mode: TransformMode::Pixel,
@@ -82,11 +86,11 @@ fn region_center_origin(camera: &Controller, viewport_min: [f32; 2], selection: 
 
 fn picked() -> PrefabInstanceId {
     let mut map = dmm::Map::new(dmm::Size { x: 1, y: 1, z: 1 });
-    let key = map.intern_tile(vec![dmm::Prefab::new(base::path::TreePath::parse("/obj/test"))]);
+    let key = map.intern_tile(vec![Prefab::new(base::path::TreePath::parse("/obj/test"))]);
     map.grid[0][0][0] = key;
     let document = crate::document::MapDocument::new(map, 1);
 
-    document.instance_ids_at(dmm::Coord::new(1, 1, 1))[0]
+    document.instance_ids_at(Coord::new(1, 1, 1))[0]
 }
 
 #[test]
@@ -516,7 +520,7 @@ fn shift_snapping_respects_axis_constraints() {
 #[test]
 fn reanchoring_is_disabled_without_ctrl() {
     let mut state = drag(Handle::X);
-    restart(&mut state, [15, 0], [47.0, 0.0], dmm::Coord::new(2, 1, 1));
+    restart(&mut state, [15, 0], [47.0, 0.0], Coord::new(2, 1, 1));
     state.zoom = 1.0;
 
     let (coord, values) = anchored_values(&state, [120.0, 100.0], false, false, (10, 10));
@@ -528,13 +532,13 @@ fn reanchoring_is_disabled_without_ctrl() {
 #[test]
 fn ctrl_reanchoring_stays_relative_to_the_start_tile_during_a_continued_drag() {
     let mut state = drag(Handle::X);
-    restart(&mut state, [15, 0], [47.0, 0.0], dmm::Coord::new(2, 1, 1));
+    restart(&mut state, [15, 0], [47.0, 0.0], Coord::new(2, 1, 1));
     state.zoom = 1.0;
 
     let (first_coord, first_values) = anchored_values(&state, [120.0, 100.0], false, true, (10, 10));
     let (second_coord, second_values) = anchored_values(&state, [125.0, 100.0], false, true, (10, 10));
 
-    assert_eq!(first_coord, dmm::Coord::new(3, 1, 1));
+    assert_eq!(first_coord, Coord::new(3, 1, 1));
     assert_eq!(second_coord, first_coord);
     assert_eq!(first_values, [3, 0]);
     assert_eq!(second_values, [8, 0]);

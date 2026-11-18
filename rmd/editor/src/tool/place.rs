@@ -1,11 +1,11 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::collections::BTreeMap;
 
-use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::{
-    document::{MapDocument, PrefabInstanceId, command::Edit, instance::PlacedPrefab, instance::PlacedTile},
+    document::{MapDocument, command::Edit, grid::TileView, instance::PlacedPrefab, instance::PlacedTile},
     environment::world::{BaseTile, World},
     frame::options::HiddenTypes,
 };
@@ -60,7 +60,7 @@ impl BaseKind {
     }
 }
 
-pub fn is_missing_base(tile: &[Prefab]) -> bool {
+pub fn is_missing_base(tile: TileView<'_>) -> bool {
     [BaseKind::Turf, BaseKind::Area]
         .into_iter()
         .any(|kind| !tile.iter().any(|prefab| kind.is_prefab(prefab)))

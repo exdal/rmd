@@ -1,20 +1,7 @@
+use base::coord::Coord;
 use std::collections::HashMap;
 
-use crate::{Coord, Map, Prefab, Size, Tile, key::Key};
-
-pub fn tiles_equal(left: &Tile, right: &Tile) -> bool {
-    left.len() == right.len() && left.iter().zip(right).all(|(left, right)| prefabs_equal(left, right))
-}
-
-pub fn prefabs_equal(left: &Prefab, right: &Prefab) -> bool {
-    left.path == right.path
-        && left.vars.len() == right.vars.len()
-        && left
-            .vars
-            .iter()
-            .zip(&right.vars)
-            .all(|((left_name, left), (right_name, right))| left_name == right_name && left.value == right.value)
-}
+use crate::{Map, Size, Tile, key::Key, tiles_equal};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TileConflict {
@@ -128,10 +115,11 @@ pub fn merge3(base: Option<&Map>, ours: &Map, theirs: &Map) -> Merged {
 
 #[cfg(test)]
 mod tests {
-    use base::{path::TreePath, types::Value};
+    use base::{coord::Coord, path::TreePath, types::Value};
+    use prefab::Prefab;
 
-    use super::{merge3, tiles_equal};
-    use crate::{Coord, Map, Prefab, Size, Tile, parser::parse, writer::write};
+    use super::merge3;
+    use crate::{Map, Size, Tile, parser::parse, tiles_equal, writer::write};
 
     fn map(source: &str) -> Map {
         let (map, errors) = parse(source);

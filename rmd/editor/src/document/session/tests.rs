@@ -1,9 +1,12 @@
-use base::{path::TreePath, types::Value};
+use std::slice;
 
-use dmm::{Coord, Map, MapFormat, Prefab, Size};
+use base::{coord::Coord, path::TreePath, types::Value};
+
+use dmm::{Map, MapFormat, Size};
+use prefab::Prefab;
 
 use crate::{
-    document::MapDocument,
+    document::{MapDocument, command::Edit, grid::TileView},
     session::{
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},
@@ -212,7 +215,7 @@ fn new_map_creation_accepts_dimensions_above_255() {
         assert_eq!(document.z, 1);
         assert!(document.is_dirty());
         for coord in [Coord::new(1, 1, 1), Coord::new(size.x, size.y, size.z)] {
-            assert_eq!(document.map.tile_at(coord), Some(&fill));
+            assert_eq!(document.map.tile_at(coord).map(TileView::to_tile), Some(fill.clone()));
         }
     }
 }
@@ -358,4 +361,71 @@ fn exporting_the_open_map_as_tgm_round_trips_through_the_parser() {
     assert_eq!(reparsed.dictionary, before.dictionary);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn map_prefabs_of_lists_each_placed_prefab_once_and_drops_removed_ones() {
+    let path = TreePath::parse("/turf/floor");
+    let floor = Prefab::new(path.clone());
+    let mut east = floor.clone();
+    east.set_var("dir".into(), Value::Num(4.0));
+    let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
+    let plain = map.intern_tile(vec![floor.clone()]);
+    let facing = map.intern_tile(vec![east.clone()]);
+    map.grid[0][0] = vec![plain, facing, plain];
+    let mut session = Session::new();
+    let id = session.state.open_document(MapDocument::new(map, 1));
+    session.rebuild_instances(id);
+
+    assert_eq!(session.map_prefabs_of(id, &path), [floor.clone(), east]);
+
+    let document = session.state.document_mut(id).unwrap();
+    let placed = vec![document.instantiate(floor.clone())];
+    let mut edit = Edit::new("replace");
+    edit.change(document, Coord::new(2, 1, 1), placed);
+    assert!(document.apply(edit));
+
+    assert_eq!(session.map_prefabs_of(id, &path), [floor]);
+}
+
+#[test]
+fn pinned_prefabs_stay_listed_without_placements_and_are_never_written() {
+    let path = TreePath::parse("/turf/floor");
+    let floor = Prefab::new(path.clone());
+    let mut east = floor.clone();
+    east.set_var("dir".into(), Value::Num(4.0));
+    let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+    let plain = map.intern_tile(vec![floor.clone()]);
+    map.grid[0][0][0] = plain;
+    let mut session = Session::new();
+    let id = session.state.open_document(MapDocument::new(map, 1));
+    session.rebuild_instances(id);
+
+    session.pin_prefabs(id, &[east.clone(), floor.clone()]);
+
+    assert_eq!(session.map_prefabs_of(id, &path), [floor.clone(), east]);
+    let document = session.state.document(id).unwrap();
+    document.map.assert_placement_counts();
+    let written = document.to_map();
+    assert_eq!(written.dictionary.values().collect::<Vec<_>>(), [&vec![floor]]);
+}
+
+#[test]
+fn map_prefabs_of_lists_placed_prefabs_before_pinned_ones() {
+    let path = TreePath::parse("/turf/floor");
+    let floor = Prefab::new(path.clone());
+    let mut east = floor.clone();
+    east.set_var("dir".into(), Value::Num(4.0));
+    let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+    let facing = map.intern_tile(vec![east.clone()]);
+    map.grid[0][0][0] = facing;
+    let mut session = Session::new();
+    let id = session.state.open_document(MapDocument::new(map, 1));
+    session.rebuild_instances(id);
+
+    session.pin_prefabs(id, slice::from_ref(&floor));
+
+    assert_eq!(session.map_prefabs_of(id, &path), [east.clone(), floor.clone()]);
+    assert!(session.is_prefab_placed(id, &east));
+    assert!(!session.is_prefab_placed(id, &floor));
 }

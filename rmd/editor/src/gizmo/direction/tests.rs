@@ -1,13 +1,14 @@
 use base::{
+    coord::Coord,
     location::Location,
     path::TreePath,
     types::{Identifier, Value},
 };
 use std::sync::Arc;
 
-use dmi::metadata::Dir;
-use dmm::Prefab;
+use dmi::metadata::{Dir, IconState, Metadata};
 use objtree::ObjectTree;
+use prefab::Prefab;
 
 use super::{direction_mutation, directional_types_for};
 use crate::{
@@ -36,7 +37,7 @@ fn an_identical_scope_rotation_moves_every_matching_placement_to_the_new_subtype
         .state
         .active_document()
         .unwrap()
-        .instance_ids_at(dmm::Coord::new(1, 1, 1))[0];
+        .instance_ids_at(Coord::new(1, 1, 1))[0];
     session.pick_instance(Some(first));
 
     assert_eq!(
@@ -143,7 +144,7 @@ fn facing_several_picks_changes_the_path_of_directional_types_and_the_dir_of_the
                 .state
                 .active_document()
                 .unwrap()
-                .instance_ids_at(dmm::Coord::new(x, 1, 1))[0]
+                .instance_ids_at(Coord::new(x, 1, 1))[0]
         })
         .collect::<Vec<_>>();
     session.toggle_pick(ids[0]);
@@ -167,4 +168,65 @@ fn facing_several_picks_changes_the_path_of_directional_types_and_the_dir_of_the
         document.prefab_instance(ids[1]).unwrap().prefab().var(&"dir".into()),
         None
     );
+}
+
+fn four_direction_session(paths: &[&str]) -> Session {
+    let mut tree = ObjectTree::new();
+    for path in paths {
+        tree.register(&TreePath::parse(path), Location::default());
+    }
+    let mut environment = Environment::new(".", tree);
+    environment.icons.insert(
+        String::from("four.dmi"),
+        Metadata {
+            states: vec![IconState {
+                name: String::from("four"),
+                dirs: 4,
+                frames: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    );
+    let mut session = Session::new();
+    session.state.environment = Some(Arc::new(environment));
+
+    session
+}
+
+fn four_direction_prefab(path: &str) -> Prefab {
+    let mut prefab = Prefab::new(TreePath::parse(path));
+    prefab.set_var("icon".into(), Value::Resource(String::from("four.dmi")));
+    prefab.set_var("icon_state".into(), Value::Text(String::from("four")));
+
+    prefab
+}
+
+fn facing(prefab: &Prefab, direction: Dir) -> Prefab {
+    let mut variant = prefab.clone();
+    variant.set_var("dir".into(), Value::Num(direction.to_bits() as f32));
+
+    variant
+}
+
+#[test]
+fn direction_variants_follow_the_icon_state_direction_count() {
+    let session = four_direction_session(&["/obj/sign"]);
+    let prefab = four_direction_prefab("/obj/sign");
+
+    assert_eq!(
+        session.direction_variants(&prefab),
+        Dir::ORDER[..4]
+            .iter()
+            .map(|direction| facing(&prefab, *direction))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn directional_map_helpers_have_no_direction_variants() {
+    let session = four_direction_session(&["/obj/alarm/directional/north", "/obj/alarm/directional/east"]);
+    let prefab = four_direction_prefab("/obj/alarm/directional/north");
+
+    assert!(session.direction_variants(&prefab).is_empty());
 }

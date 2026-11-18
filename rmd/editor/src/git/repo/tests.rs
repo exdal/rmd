@@ -1,5 +1,6 @@
 use super::{OperationKind, detect_operation, discover, parse_pull_request, web_links_from_url};
 use crate::git::fixtures::{commit, git, git_available, temp_repo};
+use base::coord::Coord;
 
 #[test]
 fn commit_links_follow_the_remote_host_without_credentials() {
@@ -133,12 +134,8 @@ fn resolves_revisions_and_reads_the_map_they_hold() {
 
     let turf = |spec: &str| {
         let commit = repo.resolve(spec).unwrap();
-        repo.map_at(&commit.hash).map(|map| {
-            map.and_then(|map| {
-                map.tile_at(dmm::Coord::new(1, 1, 1))
-                    .map(|tile| tile[0].path.to_string())
-            })
-        })
+        repo.map_at(&commit.hash)
+            .map(|map| map.and_then(|map| map.tile_at(Coord::new(1, 1, 1)).map(|tile| tile[0].path.to_string())))
     };
     assert_eq!(turf("HEAD~1"), Ok(Some(String::from("/turf/wall"))));
     assert_eq!(turf("v1"), Ok(Some(String::from("/turf/floor"))));

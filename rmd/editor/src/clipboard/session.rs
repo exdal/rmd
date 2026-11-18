@@ -1,8 +1,9 @@
-use dmm::Coord;
+use base::coord::Coord;
+use prefab::PrefabInstanceId;
 
 use crate::{
     clipboard::{self, PasteMerge, TileRegion},
-    document::{DocumentId, PrefabInstanceId, command::EditGroupId, selection::Selection},
+    document::{DocumentId, command::EditGroupId, selection::Selection},
     tool::{RegionSelectionMode, SelectionMask, SelectionRotation, Tool, ToolEdit},
 };
 use crate::{region::session::RegionState, session::Session};

@@ -1,7 +1,7 @@
 use std::iter;
 
+use base::coord::Coord;
 use dear_imgui_rs::{MouseButton, PopupQueryFlags, Ui};
-use dmm::Coord;
 use ui::widgets::dpi;
 
 use super::peer_color;

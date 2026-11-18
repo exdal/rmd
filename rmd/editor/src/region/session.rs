@@ -1,10 +1,11 @@
 use std::mem;
 
-use dmm::Coord;
+use base::coord::Coord;
+use prefab::PrefabInstanceId;
 
 use crate::{clipboard::session::FloatingPaste, session::Session};
 use crate::{
-    document::{DocumentId, PrefabInstanceId, command::EditGroupId, selection::Selection},
+    document::{DocumentId, command::EditGroupId, selection::Selection},
     tool::{
         RegionSelectionMode, SelectionMask, SelectionPlacement, SelectionRotation, SelectionTransform, Tool,
         place::is_placeable,

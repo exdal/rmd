@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
+use base::coord::Coord;
 use dear_imgui_rs::{MouseButton, Ui};
-use dmm::Coord;
 use render::Renderer;
 use ui::{
     icons::materialdesignicons::{ICON_MAP_MARKER, ICON_OPEN_IN_NEW},
