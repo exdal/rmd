@@ -18,3 +18,5 @@ pub const RESET_ALPHA: u32 = 4;
 pub const RESET_TRANSFORM: u32 = 8;
 pub const KEEP_TOGETHER: u32 = 32;
 pub const KEEP_APART: u32 = 64;
+
+pub const JSON_PRETTY_PRINT: u32 = 1;

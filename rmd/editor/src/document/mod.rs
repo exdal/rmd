@@ -13,7 +13,7 @@ pub(crate) mod state;
 
 use base::{
     coord::Coord,
-    types::{Identifier, Value},
+    types::{Identifier, Value, decode_string},
 };
 use std::{
     borrow::Cow,
@@ -47,6 +47,13 @@ use instance::{InstanceChange, PlacedPrefab, PlacedTile, VarMutation};
 use journal::Journal;
 use selection::Selection;
 
+fn is_default(default: &Value, raw: &Value) -> bool {
+    match raw {
+        Value::Text(text) => default.as_text() == Some(&decode_string(text)),
+        raw => default == raw,
+    }
+}
+
 pub fn sanitize_vars(map: &mut Map, tree: &ObjectTree) -> usize {
     let mut dropped = 0;
     for prefab in map.dictionary.values_mut().flatten() {
@@ -57,7 +64,7 @@ pub fn sanitize_vars(map: &mut Map, tree: &ObjectTree) -> usize {
             let redundant = variable.value != Value::Unevaluated
                 && tree
                     .var_inherited(id, name)
-                    .is_some_and(|declaration| declaration.value == variable.value);
+                    .is_some_and(|declaration| is_default(&declaration.value, &variable.value));
             dropped += usize::from(redundant);
             !redundant
         });

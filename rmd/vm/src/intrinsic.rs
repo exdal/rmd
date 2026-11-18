@@ -278,6 +278,7 @@ impl Evaluator<'_> {
             Intrinsic::Splittext => self.splittext(text(0), text(1)),
             Intrinsic::Params2list => self.params2list(text(0)),
             Intrinsic::JsonDecode => self.json_decode(text(0)),
+            Intrinsic::JsonEncode => self.json_encode(&arg(0), arg(1).num().unwrap_or(0.0) as u32),
             Intrinsic::Ref => self.ref_text(&arg(0)),
             Intrinsic::Hascall => Ok(self.hascall(arg(0), text(1)).into()),
             Intrinsic::Crash => self.crash(arg(0)),
@@ -344,7 +345,6 @@ impl Evaluator<'_> {
             | Intrinsic::HtmlDecode
             | Intrinsic::HtmlEncode
             | Intrinsic::Ispointer
-            | Intrinsic::JsonEncode
             | Intrinsic::Lentext
             | Intrinsic::List2params
             | Intrinsic::LoadResource

@@ -4665,6 +4665,154 @@ fn file_reads_cannot_leave_the_codebase_root() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+fn run_text_proc(source: &str, name: &str) -> Result<String, Fault> {
+    let (tree, module) = compile(source);
+
+    Runtime::default()
+        .run(
+            &tree,
+            &module,
+            proc(&tree, &module.index, name),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .map(|value| value.display())
+}
+
+#[test]
+fn numbers_interpolate_like_byond() {
+    let source = fixture!("programs/numbers_interpolate_like_byond.dm");
+    let expected = [
+        ("integers", "10000000|1234567|16777216|16777216|999999|1000000|0|255|-3"),
+        ("fractions", "0.1|0.333333|123457|-2.25|0.0001"),
+        (
+            "exponents",
+            "1e-05|1e-07|1e+08|2.14748e+09|2.14748e+09|1e+10|-1e+08|1e+30|3.4e+38",
+        ),
+        ("num2text_matches", "1e+08|0.333333|7"),
+        ("text2num_round_trip", "1e+08|1e-05|0.333333"),
+        ("concatenated", "a1e+080.5"),
+    ];
+    for (name, text) in expected {
+        assert_eq!(run_text_proc(source, name).expect(name), text, "{name}");
+    }
+}
+
+#[test]
+fn datums_interpolate_as_their_type() {
+    let source = fixture!("programs/datums_interpolate_as_their_type.dm");
+
+    assert_eq!(
+        run_text_proc(source, "datum_text").unwrap(),
+        "/datum/thing|/datum/thing|/datum/thing,1e+08|/datum/thing"
+    );
+}
+
+#[test]
+fn json_encode_matches_byond() {
+    let source = fixture!("programs/json_encode_matches_byond.dm");
+    let expected = [
+        ("empty_list", "[]"),
+        ("integers", "[5,-3,0,255,1234567,16777216]"),
+        ("fractions", "[0.5,-2.25,0.1,0.333333,0.0001,1e-07]"),
+        ("large", "[1000000,10000000,1e+30,3.4e+38]"),
+        ("exponents", "[1e+08,2.14748e+09,2.14748e+09,1e+10,-1e+08]"),
+        (
+            "non_finite",
+            r#"[{"__number__":"Infinity"},{"__number__":"-Infinity"},{"__number__":"-NaN"}]"#,
+        ),
+        ("null_value", "null"),
+        ("null_entry", "[null,1]"),
+        ("type_path", r#""/obj/widget""#),
+        ("datum_value", r#""/datum/thing""#),
+        ("datum_in_list", r#"["/datum/thing"]"#),
+        ("associations", r#"{"a":1,"b":[2,3]}"#),
+        ("key_without_a_value", r#"{"a":null,"b":2}"#),
+        ("typed_keys", r#"{"/datum/thing":1,"/obj/widget":2}"#),
+        ("nested", "[[],[[1]]]"),
+        (
+            "escapes",
+            r#""quote \" backslash \\ slash / tab \t newline \n unicode \u00e7""#,
+        ),
+        ("control_byte", r#""\udc01""#),
+        ("control_characters", r#""\b\f\r""#),
+        ("delete_character", "\"\u{7f}\""),
+        ("surrogate_pair", r#""\ud83d\ude00""#),
+        ("pretty_object", "{\n    \"a\": 1, \n    \"b\": [\n        2\n    ]\n}"),
+        ("pretty_empty", "[]"),
+        ("pretty_empty_member", "{\n    \"a\": []\n}"),
+        (
+            "pretty_array",
+            "[\n    {\n        \"a\": 1, \n        \"b\": 2\n    }, \n    3\n]",
+        ),
+        ("strict_flag_is_ignored", "[1]"),
+        ("round_trip", "q\"uote|2.5|three|0|1"),
+    ];
+    for (name, json) in expected {
+        assert_eq!(run_text_proc(source, name).expect(name), json, "{name}");
+    }
+}
+
+#[test]
+fn text_macros_mark_the_text() {
+    let source = fixture!("programs/text_macros_mark_the_text.dm");
+    let expected = [
+        ("lengths", "8|8|6"),
+        ("comparisons", "0|1|0"),
+        ("copies", r#"""|"Widget""#),
+        ("searches", "3|3"),
+        ("concatenation", r#""Widget!"|"x Widget""#),
+        ("ascii_codes", "65533|22|87|21"),
+        ("uppercased", r#""WIDGET""#),
+        ("whole_words_only", "9|11"),
+    ];
+    for (name, text) in expected {
+        assert_eq!(run_text_proc(source, name).expect(name), text, "{name}");
+    }
+
+    let (tree, module) = compile(source);
+    let mut runtime = Runtime::default();
+    runtime
+        .run(
+            &tree,
+            &module,
+            proc(&tree, &module.index, "logged"),
+            None,
+            None,
+            Vec::new(),
+            Limits::default(),
+        )
+        .unwrap();
+    assert_eq!(runtime.take_output(), ["Widget"]);
+}
+
+#[test]
+fn atoms_interpolate_as_their_name() {
+    let source = fixture!("programs/atoms_interpolate_as_their_name.dm");
+    let expected = [
+        ("interpolated", "the widget | Widget | the Widget | widget |  | Bob"),
+        (
+            "prefixed",
+            "x the widget | x Widget | x the Widget | x widget | x  | x Bob",
+        ),
+        ("encoded", r#"["the widget","Widget","the Widget","widget","","Bob"]"#),
+        ("names", r#"["widget","Widget","widget"]"#),
+        ("joined", "the widget,Widget"),
+    ];
+    for (name, text) in expected {
+        assert_eq!(run_text_proc(source, name).expect(name), text, "{name}");
+    }
+}
+
+#[test]
+fn json_encode_faults_past_the_depth_limit() {
+    let fault = run_text_proc(fixture!("programs/json_encode_matches_byond.dm"), "self_containing")
+        .expect_err("a list holding itself");
+    assert_eq!(fault.kind, FaultKind::Memory);
+}
+
 #[test]
 fn modules_are_inserted_before_atom_hooks() {
     let (tree, module) = compile(fixture!("programs/modules_are_inserted_before_atom_hooks.dm"));

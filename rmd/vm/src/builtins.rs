@@ -211,7 +211,7 @@ impl Evaluator<'_> {
                 let end = index_arg(&args, 2, 0, len + 1);
                 let mut output = String::new();
                 for (index, (v, _)) in entries.get(start.min(end)..end).unwrap_or_default().iter().enumerate() {
-                    let value = v.display();
+                    let value = self.text_of(v);
                     let extra = value.len() + if index == 0 { 0 } else { delimiter.len() };
                     if output.len().saturating_add(extra) > self.limits.text_bytes {
                         return Err(self.fault(FaultKind::Memory));

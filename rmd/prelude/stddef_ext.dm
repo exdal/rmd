@@ -864,7 +864,7 @@
 /proc/json_decode(JSON)
 	set __demir_intrin = "JsonDecode"
 
-/proc/json_encode(Value)
+/proc/json_encode(Value, flags = 0)
 	set __demir_intrin = "JsonEncode"
 
 /proc/length_char(E)

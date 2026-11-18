@@ -1,6 +1,6 @@
 use base::{
     path::TreePath,
-    types::{Identifier, ListEntry, Value},
+    types::{Identifier, ListEntry, Value, encode_text_macros},
     vars,
 };
 use std::collections::{HashMap, HashSet};
@@ -227,7 +227,7 @@ fn property_editor_text(name: &str, value: &Value, source: &str) -> String {
 pub(super) fn display_source(value: &Value) -> String {
     match value {
         Value::Unevaluated => String::from("<runtime>"),
-        value => format_value(value),
+        value => encode_text_macros(&format_value(value)),
     }
 }
 
@@ -291,7 +291,7 @@ pub(super) fn inspector_variables(
             name: name.clone(),
             source: variable
                 .spelling()
-                .map_or_else(|| format_value(&variable.value), str::to_string),
+                .map_or_else(|| encode_text_macros(&format_value(&variable.value)), str::to_string),
             overridden: true,
             value: variable.value.clone(),
             ty: declaration.and_then(|(tree, id)| tree.resolved_var_type(id, name).cloned()),

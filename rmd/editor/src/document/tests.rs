@@ -147,6 +147,46 @@ fn sanitizing_drops_constant_defaults_and_merges_tiles_that_become_equal() {
     );
 }
 
+#[test]
+fn sanitizing_compares_text_after_decoding_its_escapes() {
+    let mut tree = objtree::ObjectTree::new();
+    let table = tree.register(&TreePath::parse("/obj/table"), base::location::Location::default());
+    for (name, value) in [
+        ("name", Value::Text(String::from("\u{FFFD}\u{16}Table"))),
+        ("desc", Value::Text(String::from("a \"quoted\" desk"))),
+    ] {
+        tree.get_mut(table).unwrap().vars.insert(
+            name.into(),
+            objtree::VarDecl {
+                name: name.into(),
+                declared_type: None,
+                modifiers: Default::default(),
+                value,
+                declared: true,
+                location: Default::default(),
+                resolved_type: None,
+                shared: None,
+            },
+        );
+    }
+    let with = |vars: &[(&str, &str)]| {
+        let mut prefab = Prefab::new(TreePath::parse("/obj/table"));
+        for (name, value) in vars {
+            prefab.set_var((*name).into(), Value::Text((*value).to_string()));
+        }
+        vec![prefab]
+    };
+    let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
+    let plain = map.intern_tile(with(&[]));
+    let same = map.intern_tile(with(&[("name", r"\improper Table"), ("desc", r#"a \"quoted\" desk"#)]));
+    let different = map.intern_tile(with(&[("name", r"\improper Chair")]));
+    map.grid[0][0] = vec![plain, same, different];
+
+    assert_eq!(sanitize_vars(&mut map, &tree), 2);
+    assert_eq!(map.grid[0][0], [plain, plain, different]);
+    assert_eq!(map.dictionary[&different], with(&[("name", r"\improper Chair")]));
+}
+
 fn shared_tile_map() -> Map {
     let mut map = Map::new(Size { x: 2, y: 1, z: 2 });
     let key = map.intern_tile(vec![

@@ -1,4 +1,9 @@
-use base::{coord::Coord, path::TreePath, types::Identifier, vars};
+use base::{
+    coord::Coord,
+    path::TreePath,
+    types::{Identifier, encode_text_macros},
+    vars,
+};
 
 use dear_imgui_rs::{Key, MouseButton, PopupToken, Ui, WindowHoveredFlags};
 use objtree::ObjectTree;
@@ -510,7 +515,7 @@ fn display_name(tree: Option<&ObjectTree>, prefab: &Prefab) -> String {
         })
         .and_then(|value| value.as_text())
         .filter(|value| !value.is_empty())
-        .map(str::to_owned)
+        .map(encode_text_macros)
         .unwrap_or_else(|| prefab.path.to_string().rsplit('/').next().unwrap_or("atom").to_owned())
 }
 

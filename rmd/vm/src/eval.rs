@@ -1,7 +1,7 @@
 use base::{
     location::SourceLine,
     path::{PathFlags, TreePath},
-    types::{Identifier, ProcId, Value},
+    types::{IMPROPER_MACRO, Identifier, PROPER_MACRO, ProcId, TEXT_MACRO, Value, strip_text_macros},
     vars,
 };
 use std::{
@@ -20,7 +20,7 @@ use crate::{
     Fault, FaultKind, GenericValue, Limits, StackFrame,
     bake::Placement,
     heap::{Heap, Object, ObjectId, Static},
-    value::{IteratorId, ListData, ListId, ModifiedType, ProcRef, RangeValue, Src},
+    value::{IteratorId, ListData, ListId, MAX_EXACT_INTEGER, ModifiedType, ProcRef, RangeValue, Src},
     world::{Position, World},
 };
 
@@ -474,6 +474,40 @@ impl<'a> Evaluator<'a> {
             .map_err(|kind| self.fault(kind))
     }
 
+    pub fn text_of(&mut self, value: &GenericValue) -> String {
+        let GenericValue::Object(id) = value else {
+            return value.display();
+        };
+        let Some(ty) = self.runtime.heap.object(*id).map(|object| object.ty) else {
+            return value.display();
+        };
+
+        let is_atom = self.is_root_type(value, self.tree.roots().atom);
+        if !is_atom {
+            return self
+                .tree
+                .get(ty)
+                .map_or_else(|| value.display(), |decl| decl.path.spelled());
+        }
+
+        let name = match self.read_field(value.clone(), &Identifier::from("name")) {
+            Ok(GenericValue::Text(name)) => name,
+            _ => return String::new(),
+        };
+        let marked = |code: char| name.strip_prefix(TEXT_MACRO).and_then(|rest| rest.strip_prefix(code));
+        let text = if let Some(rest) = marked(PROPER_MACRO) {
+            rest.to_string()
+        } else if let Some(rest) = marked(IMPROPER_MACRO) {
+            format!("the {rest}")
+        } else if name.is_empty() || name.starts_with(|ch: char| ch.is_ascii_uppercase()) {
+            name.to_string()
+        } else {
+            format!("the {name}")
+        };
+
+        strip_text_macros(&text)
+    }
+
     pub fn text(&mut self, text: String) -> Result<GenericValue> {
         if text.len() > self.limits.text_bytes {
             return Err(self.fault(FaultKind::Memory));
@@ -495,7 +529,7 @@ impl<'a> Evaluator<'a> {
         self.rng ^= self.rng << 13;
         self.rng ^= self.rng >> 7;
         self.rng ^= self.rng << 17;
-        ((self.rng >> 40) as f32) / 16_777_216.0
+        ((self.rng >> 40) as f32) / MAX_EXACT_INTEGER
     }
 
     pub fn find_proc(&self, ty: TypeId, name: &Identifier) -> Option<ProcId> {
@@ -772,12 +806,12 @@ impl<'a> Evaluator<'a> {
                     for (index, chunk) in chunks.iter().enumerate() {
                         output.push_str(chunk);
                         if let Some(value) = registers.get(index) {
-                            let value = self.get(frame, *value)?;
+                            let value = self.get(frame, *value)?.clone();
                             if matches!(value, GenericValue::Object(_) | GenericValue::Proc(_)) {
                                 self.is_cacheable = false;
                             }
 
-                            output.push_str(&value.display());
+                            output.push_str(&self.text_of(&value));
                         }
 
                         if output.len() > self.limits.text_bytes {
@@ -1137,7 +1171,8 @@ impl<'a> Evaluator<'a> {
                             return Err(self.fault(FaultKind::Blocked("output".into())));
                         }
 
-                        let text = self.get(frame, value)?.display();
+                        let value = self.get(frame, value)?.clone();
+                        let text = strip_text_macros(&self.text_of(&value));
                         self.runtime.output.push(text);
                     },
                 },

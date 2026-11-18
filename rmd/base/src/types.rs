@@ -173,6 +173,67 @@ impl std::fmt::Display for Value {
     }
 }
 
+pub const TEXT_MACRO: char = '\u{FFFD}';
+pub const PROPER_MACRO: char = '\u{15}';
+pub const IMPROPER_MACRO: char = '\u{16}';
+
+pub fn strip_text_macros(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        // a lone U+FFFD is a raw invalid byte, which output keeps
+        let is_macro = ch == TEXT_MACRO
+            && chars
+                .peek()
+                .is_some_and(|code| TEXT_MACROS.iter().any(|(_, macro_code)| macro_code == code));
+        if is_macro {
+            chars.next();
+        } else {
+            out.push(ch);
+        }
+    }
+
+    out
+}
+
+const TEXT_MACROS: [(&str, char); 2] = [("improper", IMPROPER_MACRO), ("proper", PROPER_MACRO)];
+
+pub fn encode_text_macros(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let name = (ch == TEXT_MACRO)
+            .then(|| {
+                chars
+                    .peek()
+                    .and_then(|code| TEXT_MACROS.iter().find(|(_, macro_code)| macro_code == code))
+            })
+            .flatten();
+        match name {
+            Some((name, _)) => {
+                chars.next();
+                out.push('\\');
+                out.push_str(name);
+                out.push(' ');
+            },
+            None => out.push(ch),
+        }
+    }
+
+    out
+}
+
+fn text_macro(rest: &str) -> Option<(char, usize)> {
+    TEXT_MACROS.into_iter().find_map(|(name, code)| {
+        let after = rest.strip_prefix(name)?;
+        if after.starts_with(|ch: char| ch.is_alphanumeric() || ch == '_') {
+            return None;
+        }
+
+        Some((code, name.len() + usize::from(after.starts_with(' '))))
+    })
+}
+
 pub fn decode_string(source: &str) -> String {
     let mut out = String::new();
     let mut chars = source.chars();
@@ -180,6 +241,14 @@ pub fn decode_string(source: &str) -> String {
     while let Some(ch) = chars.next() {
         if ch != '\\' {
             out.push(ch);
+
+            continue;
+        }
+
+        if let Some((code, length)) = text_macro(chars.as_str()) {
+            out.push(TEXT_MACRO);
+            out.push(code);
+            chars = chars.as_str()[length..].chars();
 
             continue;
         }
@@ -302,7 +371,7 @@ impl std::ops::BitOrAssign for InputType {
 mod tests {
     use std::hash::{BuildHasher, RandomState};
 
-    use super::{InputType, IrNodeId, ListEntry, ProcId, Value, decode_string};
+    use super::{InputType, IrNodeId, ListEntry, ProcId, Value, decode_string, encode_text_macros, strip_text_macros};
 
     /// The disassembly form comes off `Display`, so `Debug` on a container prints it too.
     #[test]
@@ -371,6 +440,27 @@ mod tests {
     fn leaves_undefined_escapes_as_written() {
         assert_eq!(decode_string(r"a\qb"), r"a\qb");
         assert_eq!(decode_string(r"100\%"), r"100\%");
+    }
+
+    #[test]
+    fn text_macros_become_a_marker_pair_and_eat_one_space() {
+        assert_eq!(decode_string(r"\improper Widget"), "\u{FFFD}\u{16}Widget");
+        assert_eq!(decode_string(r"\proper widget"), "\u{FFFD}\u{15}widget");
+        assert_eq!(decode_string(r"\proper[x]"), "\u{FFFD}\u{15}[x]");
+        assert_eq!(decode_string(r"\properly"), r"\properly");
+        assert_eq!(decode_string(r"\improper"), "\u{FFFD}\u{16}");
+        assert_eq!(strip_text_macros("a\u{FFFD}\u{16}b"), "ab");
+        assert_eq!(strip_text_macros("\u{FFFD}ay1"), "\u{FFFD}ay1");
+    }
+
+    #[test]
+    fn encoding_restores_the_source_spelling() {
+        for source in [r"\improper Foo", r"\proper foo", "plain", r"a \improper b \proper c"] {
+            assert_eq!(encode_text_macros(&decode_string(source)), source);
+        }
+
+        assert_eq!(encode_text_macros("a\u{FFFD}\u{17}b"), "a\u{FFFD}\u{17}b");
+        assert_eq!(encode_text_macros("\u{FFFD}"), "\u{FFFD}");
     }
 
     /// A string ending mid-escape must not drop the backslash or panic.

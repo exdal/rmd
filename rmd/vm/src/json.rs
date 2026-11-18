@@ -1,4 +1,4 @@
-use base::types::{ListEntry, Value};
+use base::types::{ListEntry, Value, strip_text_macros};
 use std::fmt;
 
 use serde::{
@@ -6,9 +6,9 @@ use serde::{
     de::{MapAccess, SeqAccess, Visitor},
 };
 
-use crate::FaultKind;
+use crate::{FaultKind, value::number_text};
 
-const MAX_DEPTH: usize = 64;
+pub(crate) const MAX_DEPTH: usize = 64;
 
 pub fn decode(source: &str, budget: usize) -> Result<Value, FaultKind> {
     if source.len() > budget {
@@ -22,6 +22,47 @@ pub fn decode(source: &str, budget: usize) -> Result<Value, FaultKind> {
     validate_depth(&value, 0)?;
 
     Ok(value)
+}
+
+pub(crate) fn write_number(out: &mut String, number: f32) {
+    if number.is_finite() {
+        out.push_str(&number_text(number));
+        return;
+    }
+
+    let name = match number {
+        number if number.is_nan() && number.is_sign_negative() => "-NaN",
+        number if number.is_nan() => "NaN",
+        number if number < 0.0 => "-Infinity",
+        _ => "Infinity",
+    };
+    out.push_str("{\"__number__\":\"");
+    out.push_str(name);
+    out.push_str("\"}");
+}
+
+pub(crate) fn write_string(out: &mut String, text: &str) {
+    out.push('"');
+    for character in strip_text_macros(text).chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            character if character < ' ' => out.push_str(&format!("\\udc{:02x}", character as u32)),
+            character if character.is_ascii() => out.push(character),
+            character => {
+                for unit in character.encode_utf16(&mut [0; 2]) {
+                    out.push_str(&format!("\\u{unit:04x}"));
+                }
+            },
+        }
+    }
+
+    out.push('"');
 }
 
 fn invalid() -> FaultKind {

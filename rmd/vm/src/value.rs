@@ -125,7 +125,7 @@ impl GenericValue {
     pub fn display(&self) -> String {
         match self {
             Self::Null | Self::Omitted => String::new(),
-            Self::Num(n) => n.to_string(),
+            Self::Num(n) => number_text(*n),
             Self::Text(s) | Self::Resource(s) => s.to_string(),
             Self::Path(p) => p.spelled(),
             Self::List(_) => "/list".into(),
@@ -360,5 +360,96 @@ impl From<i32> for GenericValue {
 impl From<usize> for GenericValue {
     fn from(n: usize) -> Self {
         Self::Num(n as f32)
+    }
+}
+
+pub(crate) const MAX_EXACT_INTEGER: f32 = 16_777_216.0;
+
+pub fn number_text(n: f32) -> String {
+    if n.is_nan() {
+        return if n.is_sign_negative() { "-nan" } else { "nan" }.into();
+    }
+
+    if n.is_infinite() {
+        return if n < 0.0 { "-inf" } else { "inf" }.into();
+    }
+
+    if n.trunc() == n && n.abs() <= MAX_EXACT_INTEGER {
+        return (n as i64).to_string();
+    }
+
+    let value = f64::from(n);
+    let scientific = format!("{value:.5e}");
+    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+    let exponent = exponent.parse::<i32>().unwrap_or(0);
+    if (-4..6).contains(&exponent) {
+        let fixed = format!("{value:.*}", (5 - exponent) as usize);
+
+        return strip_zeros(&fixed).into();
+    }
+
+    let sign = if exponent < 0 { '-' } else { '+' };
+
+    format!("{}e{sign}{:02}", strip_zeros(mantissa), exponent.abs())
+}
+
+fn strip_zeros(text: &str) -> &str {
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        text
+    }
+}
+
+#[cfg(test)]
+mod number_text_tests {
+    use super::number_text;
+
+    #[test]
+    fn whole_numbers_print_as_integers_up_to_two_to_the_24th() {
+        assert_eq!(number_text(0.0), "0");
+        assert_eq!(number_text(-0.0), "0");
+        assert_eq!(number_text(-3.0), "-3");
+        assert_eq!(number_text(16_777_216.0), "16777216");
+        assert_eq!(number_text(16_777_217.0), "16777216");
+        assert_eq!(number_text(1e7), "10000000");
+    }
+
+    #[test]
+    fn everything_else_follows_printf_six_significant_digits() {
+        let cases = [
+            (0.1, "0.1"),
+            (1.0 / 3.0, "0.333333"),
+            (123_456.7, "123457"),
+            (-2.25, "-2.25"),
+            (0.0001, "0.0001"),
+            (1e-5, "1e-05"),
+            (1e-7, "1e-07"),
+            (1e8, "1e+08"),
+            (-1e8, "-1e+08"),
+            (2_147_483_647.0, "2.14748e+09"),
+            (1e10, "1e+10"),
+            (1e30, "1e+30"),
+            (3.4e38, "3.4e+38"),
+            (999_999.5, "1e+06"),
+        ];
+        for (number, text) in cases {
+            assert_eq!(number_text(number), text, "{number:e}");
+        }
+    }
+
+    #[test]
+    fn non_finite_numbers_print_like_c() {
+        assert_eq!(number_text(f32::INFINITY), "inf");
+        assert_eq!(number_text(f32::NEG_INFINITY), "-inf");
+        assert_eq!(number_text(f32::NAN), "nan");
+        assert_eq!(number_text(-f32::NAN), "-nan");
+    }
+
+    #[test]
+    fn the_text_parses_back() {
+        for text in ["1e+08", "1e-05", "2.14748e+09"] {
+            assert!(text.parse::<f32>().is_ok(), "{text}");
+        }
     }
 }

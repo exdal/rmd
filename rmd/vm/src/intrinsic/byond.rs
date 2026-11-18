@@ -1,6 +1,8 @@
 use base::{file_path, path::TreePath, types::Identifier, vars};
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
+use defines::JSON_PRETTY_PRINT;
+
 use crate::{
     FaultKind, GenericValue, Intrinsic,
     builtins::index_arg,
@@ -10,7 +12,7 @@ use crate::{
     intrinsic::view_grid::{Sight, ViewGrid, ViewTile, dantom_spiral},
     json, lighting,
     matrix::Matrix,
-    value::{ListData, ProcRef, Src},
+    value::{ListData, ProcRef, Src, number_text},
     world::Position,
 };
 
@@ -393,7 +395,11 @@ impl Evaluator<'_> {
     pub(crate) fn dm_text(&mut self, value: GenericValue) -> Result<GenericValue> {
         match value {
             text @ GenericValue::Text(_) => Ok(text),
-            value => self.text(value.display()),
+            value => {
+                let text = self.text_of(&value);
+
+                self.text(text)
+            },
         }
     }
 
@@ -858,7 +864,7 @@ impl Evaluator<'_> {
     pub(crate) fn num2text(&mut self, value: &GenericValue) -> Result<GenericValue> {
         let n = self.number(value)?;
 
-        self.text(n.to_string())
+        self.text(number_text(n))
     }
 
     /// https://ref.dm-lang.org/proc/text2num
@@ -1081,6 +1087,89 @@ impl Evaluator<'_> {
         self.constant(&value)
     }
 
+    /// https://ref.dm-lang.org/proc/json_encode
+    ///
+    /// Value: The value to encode.
+    /// flags: JSON_PRETTY_PRINT indents the output. JSON_ENCODE_STRICT changes nothing.
+    /// Returns: A JSON-formatted text string.
+    pub(crate) fn json_encode(&mut self, value: &GenericValue, flags: u32) -> Result<GenericValue> {
+        let mut output = String::new();
+        self.json_write(&mut output, value, 0, flags & JSON_PRETTY_PRINT != 0)?;
+
+        self.text(output)
+    }
+
+    fn json_write(&mut self, output: &mut String, value: &GenericValue, depth: usize, is_pretty: bool) -> Result<()> {
+        if depth >= json::MAX_DEPTH || output.len() > self.limits.text_bytes {
+            return Err(self.fault(FaultKind::Memory));
+        }
+
+        match value {
+            GenericValue::Null | GenericValue::Omitted => output.push_str("null"),
+            GenericValue::Num(number) => json::write_number(output, *number),
+            GenericValue::List(id) | GenericValue::ArgList(id) => {
+                let entries = self
+                    .runtime
+                    .heap
+                    .list(*id)
+                    .ok_or_else(|| self.fault(FaultKind::InvalidReference))?
+                    .entries
+                    .clone();
+                let is_object = entries.iter().any(|(_, value)| value.is_some());
+                let (open, close) = if is_object { ('{', '}') } else { ('[', ']') };
+                output.push(open);
+                for (index, (key, entry)) in entries.iter().enumerate() {
+                    if index > 0 {
+                        output.push(',');
+                        if is_pretty {
+                            output.push(' ');
+                        }
+                    }
+
+                    if is_pretty {
+                        output.push('\n');
+                        output.push_str(&"    ".repeat(depth + 1));
+                    }
+
+                    if is_object {
+                        let key = self.text_of(key);
+                        json::write_string(output, &key);
+                        output.push(':');
+                        if is_pretty {
+                            output.push(' ');
+                        }
+
+                        self.json_write(
+                            output,
+                            entry.as_ref().unwrap_or(&GenericValue::Null),
+                            depth + 1,
+                            is_pretty,
+                        )?;
+                    } else {
+                        self.json_write(output, key, depth + 1, is_pretty)?;
+                    }
+                }
+
+                if is_pretty && !entries.is_empty() {
+                    output.push('\n');
+                    output.push_str(&"    ".repeat(depth));
+                }
+
+                output.push(close);
+            },
+            other => {
+                let text = self.text_of(other);
+                json::write_string(output, &text);
+            },
+        }
+
+        if output.len() > self.limits.text_bytes {
+            return Err(self.fault(FaultKind::Memory));
+        }
+
+        Ok(())
+    }
+
     /// https://ref.dm-lang.org/proc/ref
     ///
     /// Object: The object to get a reference for
@@ -1234,7 +1323,7 @@ impl Evaluator<'_> {
     pub(crate) fn addtext(&mut self, args: &[GenericValue]) -> Result<GenericValue> {
         let mut output = String::new();
         for value in args {
-            let piece = value.display();
+            let piece = self.text_of(value);
             if output.len().saturating_add(piece.len()) > self.limits.text_bytes {
                 return Err(self.fault(FaultKind::Memory));
             }
@@ -1259,7 +1348,7 @@ impl Evaluator<'_> {
 
         let mut output = String::new();
         for (index, (value, _)) in entries.get(start.min(end)..end).unwrap_or_default().iter().enumerate() {
-            let piece = value.display();
+            let piece = self.text_of(value);
             let extra = piece.len() + if index == 0 { 0 } else { glue.len() };
             if output.len().saturating_add(extra) > self.limits.text_bytes {
                 return Err(self.fault(FaultKind::Memory));
