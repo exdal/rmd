@@ -1,8 +1,7 @@
 use std::{fmt, iter::FusedIterator, ops::Index, slice};
 
-use dmm::{Prefab, Tile};
-
-use super::table::{PrefabId, PrefabTable};
+use dmm::Tile;
+use prefab::{Prefab, PrefabId, table::PrefabTable};
 
 #[derive(Clone, Copy)]
 enum Source<'a> {

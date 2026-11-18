@@ -1,6 +1,4 @@
-use base::location::Position;
-
-use crate::Coord;
+use base::{coord::Coord, location::Position};
 
 #[derive(Clone, Debug)]
 pub enum MapErrorKind {

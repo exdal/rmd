@@ -2,7 +2,8 @@ pub(crate) mod session;
 
 use std::collections::HashSet;
 
-use dmm::{Coord, Prefab, PrefabInstanceId};
+use base::coord::Coord;
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::document::command::Edit;
 
@@ -47,9 +48,9 @@ impl AreaFocus {
 
 #[cfg(test)]
 mod tests {
-    use base::path::TreePath;
+    use base::{coord::Coord, path::TreePath};
 
-    use dmm::{Coord, Prefab, PrefabInstanceId};
+    use prefab::{Prefab, PrefabInstanceId};
 
     use super::AreaFocus;
     use crate::document::command::{Edit, TileChange};

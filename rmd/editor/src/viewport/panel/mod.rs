@@ -1,7 +1,7 @@
 use std::mem;
 
+use base::coord::Coord;
 use dear_imgui_rs::{Condition, Ui, WindowFlags, WindowKey, WindowKeyError};
-use dmm::Coord;
 use render::{MapViewInteraction, MapViewRect, Renderer};
 use ui::{
     icons::materialdesignicons::{ICON_ALERT, ICON_WEB},

@@ -1,11 +1,11 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
 use dmi::metadata::Dir;
-use dmm::{Coord, Prefab};
+use prefab::{Prefab, PrefabInstanceId};
 
 use super::EditScope;
 use crate::{
-    document::{PrefabInstanceId, command::EditGroupId, instance::InstanceChange, instance::VarMutation},
+    document::{command::EditGroupId, instance::InstanceChange, instance::VarMutation},
     session::{
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session},

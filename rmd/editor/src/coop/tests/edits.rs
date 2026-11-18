@@ -1,3 +1,4 @@
+use prefab::PrefabInstanceId;
 use std::error::Error;
 
 use super::*;
@@ -1043,7 +1044,7 @@ fn a_carried_level_change_of_ours_leaves_a_newer_request_queued() {
     let _ = fs::remove_dir_all(dir);
 }
 
-fn level_ids(session: &Session, id: DocumentId, z: u32) -> Vec<dmm::PrefabInstanceId> {
+fn level_ids(session: &Session, id: DocumentId, z: u32) -> Vec<PrefabInstanceId> {
     let document = session.state.document(id).unwrap();
     (1..=2)
         .flat_map(|x| document.instance_ids_at(Coord::new(x, 1, z)).to_vec())

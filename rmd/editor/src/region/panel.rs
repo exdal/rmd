@@ -1,5 +1,6 @@
+use base::coord::Coord;
 use dear_imgui_rs::{DragFlags, DrawListMut, Ui};
-use dmm::{Coord, Size};
+use dmm::Size;
 use ui::widgets::dpi;
 
 use crate::viewport::panel::overlay::{OVERLAY_BG, OverlayRect};
@@ -387,7 +388,7 @@ pub(crate) fn draw_selection_mode_controls(ui: &Ui, session: &mut Session, optio
 
 #[cfg(test)]
 mod tests {
-    use dmm::Coord;
+    use base::coord::Coord;
 
     use super::{
         RegionSelectionOptions, hollow_selection_inner, region_border_segments, region_selection_bounds, ring_rects,

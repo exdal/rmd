@@ -5,8 +5,8 @@ use base::{
 };
 
 use dmi::metadata::Dir;
-use dmm::Prefab;
 use objtree::{ObjectTree, TypeId};
+use prefab::Prefab;
 
 use crate::{
     document::{command::EditGroupId, instance::InstanceChange, instance::VarMutation},

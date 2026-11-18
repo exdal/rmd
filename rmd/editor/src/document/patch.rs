@@ -1,5 +1,7 @@
-use dmm::{Coord, Map, Prefab, Size, Tile, parser, writer};
+use base::coord::Coord;
+use dmm::{Map, Size, Tile, parser, writer};
 use net::LevelContents;
+use prefab::Prefab;
 
 use crate::document::grid::{Grid, LevelCells};
 

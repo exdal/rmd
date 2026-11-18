@@ -1,4 +1,5 @@
 use base::{
+    coord::Coord,
     location::Location,
     path::TreePath,
     types::{Identifier, Value, VarModifiers},
@@ -14,8 +15,9 @@ use dmi::{
     IconFile,
     metadata::{Dir, IconState, Metadata},
 };
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
 use objtree::{ObjectTree, VarDecl};
+use prefab::{Prefab, PrefabInstanceId};
 use render::{
     AREA_EDGE_EAST, AREA_EDGE_NORTH, AREA_EDGE_SOUTH, AREA_EDGE_WEST, AREA_EDGES_ALL, IDENTITY_TRANSFORM,
     SpriteInstance, SpriteTexture, UpdateRange, texture::TextureCatalog,
@@ -31,7 +33,7 @@ use super::{
     pages::assert_pages_hold,
 };
 use crate::{
-    document::{MapDocument, PrefabInstanceId, command::Edit, instance::VarMutation},
+    document::{MapDocument, command::Edit, instance::VarMutation},
     environment::world::Perspective,
     frame::visual::Appearance,
 };
@@ -60,7 +62,7 @@ fn a_tint_is_premultiplied_by_alpha() {
         owner(),
         &appearance(Some("#ff0000"), 128),
         SpriteTexture::default(),
-        dmm::Coord::new(1, 1, 1),
+        Coord::new(1, 1, 1),
         32,
         false,
     );
@@ -75,7 +77,7 @@ fn an_untinted_sprite_keeps_its_alpha_on_every_channel() {
         owner(),
         &appearance(None, 255),
         SpriteTexture::default(),
-        dmm::Coord::new(1, 1, 1),
+        Coord::new(1, 1, 1),
         32,
         false,
     );
@@ -89,7 +91,7 @@ fn an_unreadable_color_falls_back_to_no_tint() {
         owner(),
         &appearance(Some("chartreuse"), 255),
         SpriteTexture::default(),
-        dmm::Coord::new(1, 1, 1),
+        Coord::new(1, 1, 1),
         32,
         false,
     );
@@ -113,7 +115,7 @@ fn all_offset_pairs_shift_the_sprite() {
         owner(),
         &appearance,
         SpriteTexture::default(),
-        dmm::Coord::new(2, 3, 1),
+        Coord::new(2, 3, 1),
         32,
         false,
     );
@@ -135,17 +137,10 @@ fn a_larger_than_tile_icon_anchors_to_the_bottom_left_of_its_tile() {
         ..Default::default()
     };
 
-    let plain = instance_for(
-        owner(),
-        &Appearance::default(),
-        texture,
-        dmm::Coord::new(1, 1, 1),
-        32,
-        false,
-    );
+    let plain = instance_for(owner(), &Appearance::default(), texture, Coord::new(1, 1, 1), 32, false);
     assert_eq!((plain.x, plain.y), (0.0, 0.0));
 
-    let shifted = instance_for(owner(), &centred, texture, dmm::Coord::new(1, 1, 1), 32, false);
+    let shifted = instance_for(owner(), &centred, texture, Coord::new(1, 1, 1), 32, false);
     assert_eq!((shifted.x, shifted.y), (-16.0, 0.0));
 }
 
@@ -163,7 +158,7 @@ fn a_transform_translates_the_sprite_and_turns_it_about_its_center() {
         ..Default::default()
     };
 
-    let instance = instance_for(owner(), &appearance, texture, dmm::Coord::new(1, 1, 1), 32, false);
+    let instance = instance_for(owner(), &appearance, texture, Coord::new(1, 1, 1), 32, false);
     let [a, b, d, e] = instance.transform;
     assert_eq!((instance.x, instance.y), (-4.0, -4.0));
     assert!(a.abs() < 1e-6 && (b - 1.0).abs() < 1e-6 && (d + 1.0).abs() < 1e-6 && e.abs() < 1e-6);
@@ -172,7 +167,7 @@ fn a_transform_translates_the_sprite_and_turns_it_about_its_center() {
         transform: Matrix([f32::NAN, 0.0, 3.0, 0.0, 1.0, 0.0]),
         ..Default::default()
     };
-    let instance = instance_for(owner(), &unpackable, texture, dmm::Coord::new(1, 1, 1), 32, false);
+    let instance = instance_for(owner(), &unpackable, texture, Coord::new(1, 1, 1), 32, false);
     assert_eq!((instance.x, instance.transform), (0.0, IDENTITY_TRANSFORM));
 }
 
@@ -182,7 +177,7 @@ fn an_instance_keeps_its_level_and_area_classification() {
         owner(),
         &Appearance::default(),
         SpriteTexture::default(),
-        dmm::Coord::new(1, 1, 7),
+        Coord::new(1, 1, 7),
         32,
         true,
     );
@@ -703,7 +698,7 @@ fn orders_sprites_by_layer_not_by_prefab_order() {
     let tree = tree(&[("/turf/floor", "floor", 2.0), ("/obj/table", "table", 3.0)]);
     // The map lists the high-layer object first; the frame must still draw it last.
     let document = document(one_tile_map(&["/obj/table", "/turf/floor"]));
-    let owners = document.instance_ids_at(dmm::Coord::new(1, 1, 1));
+    let owners = document.instance_ids_at(Coord::new(1, 1, 1));
 
     let instances = build(
         &tree,
@@ -1282,7 +1277,7 @@ fn prefab_updates_touch_only_the_changed_sprite_and_preserve_sorting() {
     let icons = icons(&["floor", "table"]);
     let textures = textures(&["floor", "table"]);
     let mut document = document(one_tile_map(&["/turf/floor", "/obj/table"]));
-    let owner = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[1];
+    let owner = document.instance_ids_at(Coord::new(1, 1, 1))[1];
     let mut instances = build(&tree, &icons, &textures, &document, 32);
     let before = drawn(&instances);
     // the map's one level fits in one page, which is what every change uploads
@@ -1336,7 +1331,7 @@ fn area_identity_edits_repair_components_and_cached_buffers() {
     let icons = icons(&["floor"]);
     let textures = textures(&["floor"]);
     let mut document = document(area_map(5, 5, "/area/station"));
-    let owner = document.instance_ids_at(dmm::Coord::new(3, 3, 1))[0];
+    let owner = document.instance_ids_at(Coord::new(3, 3, 1))[0];
     let mut instances = build(&tree, &icons, &textures, &document, 32);
 
     document
@@ -1369,7 +1364,7 @@ fn area_icon_edits_patch_the_sprite_buffer() {
     let icons = icons(&["floor", "alert"]);
     let textures = textures(&["floor", "alert"]);
     let mut document = document(one_tile_map(&["/area/station"]));
-    let owner = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[0];
+    let owner = document.instance_ids_at(Coord::new(1, 1, 1))[0];
     let mut instances = build(&tree, &icons, &textures, &document, 32);
 
     document
@@ -1393,11 +1388,11 @@ fn moving_an_area_repairs_components_and_cached_buffers() {
     let area = map.intern_tile(vec![Prefab::new(TreePath::parse("/area/station"))]);
     map.grid[0][0][0] = area;
     let mut document = document(map);
-    let owner = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[0];
+    let owner = document.instance_ids_at(Coord::new(1, 1, 1))[0];
     let mut instances = build(&tree, &icons, &textures, &document, 32);
 
     document
-        .move_instance(&tree, owner, dmm::Coord::new(2, 1, 1), "move area", &[], None)
+        .move_instance(&tree, owner, Coord::new(2, 1, 1), "move area", &[], None)
         .unwrap();
     let update = update_prefab(&mut instances, &tree, &icons, &textures, &document, owner, 32);
     assert!(matches!(
@@ -1419,7 +1414,7 @@ fn changing_between_area_and_object_repairs_cached_buffers() {
     let icons = icons(&["floor", "table"]);
     let textures = textures(&["floor", "table"]);
     let mut document = document(one_tile_map(&["/area/station"]));
-    let owner = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[0];
+    let owner = document.instance_ids_at(Coord::new(1, 1, 1))[0];
     let mut instances = build(&tree, &icons, &textures, &document, 32);
 
     document
@@ -1444,8 +1439,8 @@ fn changing_between_area_and_object_repairs_cached_buffers() {
 fn includes_normal_area_sprites_and_separate_outlines() {
     let tree = tree(&[("/turf/floor", "floor", 2.0), ("/area/station", "floor", 1.0)]);
     let mut document = document(one_tile_map(&["/turf/floor", "/area/station"]));
-    let turf_owner = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[0];
-    let area_owner = document.instance_ids_at(dmm::Coord::new(1, 1, 1))[1];
+    let turf_owner = document.instance_ids_at(Coord::new(1, 1, 1))[0];
+    let area_owner = document.instance_ids_at(Coord::new(1, 1, 1))[1];
     let (icons, textures) = (icons(&["floor"]), textures(&["floor"]));
 
     let mut instances = build(&tree, &icons, &textures, &document, 32);
@@ -1740,7 +1735,7 @@ fn an_unresolvable_icon_state_without_a_registered_fallback_emits_nothing() {
     let sprites = drawn(&instances);
 
     assert!(sprites.is_empty());
-    assert_eq!(document.instance_ids_at(dmm::Coord::new(1, 1, 1)).len(), 1);
+    assert_eq!(document.instance_ids_at(Coord::new(1, 1, 1)).len(), 1);
 }
 
 #[test]

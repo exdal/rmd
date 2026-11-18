@@ -1,5 +1,5 @@
 use dear_imgui_rs::{StyleColor, Ui};
-use dmm::Prefab;
+use prefab::Prefab;
 use ui::widgets::dpi;
 
 use crate::{
@@ -95,7 +95,7 @@ fn prefab_tooltip(prefab: &Prefab) -> String {
 mod tests {
     use base::path::TreePath;
 
-    use dmm::Prefab;
+    use prefab::Prefab;
 
     use super::prefab_tooltip;
 

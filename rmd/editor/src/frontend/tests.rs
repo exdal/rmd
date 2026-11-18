@@ -2,7 +2,8 @@ use base::path::TreePath;
 use std::{cell::Cell, path::PathBuf};
 
 use dear_imgui_rs::DockLayout;
-use dmm::{Prefab, Size};
+use dmm::Size;
+use prefab::Prefab;
 use ui::{
     keybind::KeyBinding,
     testing::{CONTEXT_LOCK, rectangle_context},

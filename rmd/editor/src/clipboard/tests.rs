@@ -1,6 +1,7 @@
 use base::path::TreePath;
 
-use dmm::{Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::Prefab;
 
 use super::*;
 

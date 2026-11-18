@@ -1,5 +1,5 @@
 use base::path::TreePath;
-use dmm::Prefab;
+use prefab::{Prefab, PrefabInstanceId};
 
 use dear_imgui_rs::{
     Condition, ListClipper, SelectableFlags, StyleColor, TableFlags, TableSizingPolicy, Ui, WindowKey, WindowKeyError,
@@ -7,7 +7,7 @@ use dear_imgui_rs::{
 use ui::widgets::{centered_note, dpi, focus_window_on_hover, text_wrapped_colored};
 
 use crate::{
-    document::{DocumentId, PrefabInstanceId, selection::Selection},
+    document::{DocumentId, selection::Selection},
     search::{SearchQuery, resolve_instances},
     session::Session,
     settings::Settings,
@@ -394,9 +394,10 @@ impl FindPanel {
 
 #[cfg(test)]
 mod tests {
-    use base::path::TreePath;
+    use base::{coord::Coord, path::TreePath};
 
-    use dmm::{Coord, Map, Prefab, Size};
+    use dmm::{Map, Size};
+    use prefab::Prefab;
 
     use super::*;
     use crate::{document::MapDocument, frontend::UiState, viewport::panel::MapViewState};

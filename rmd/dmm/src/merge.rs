@@ -1,6 +1,7 @@
+use base::coord::Coord;
 use std::collections::HashMap;
 
-use crate::{Coord, Map, Size, Tile, key::Key, tiles_equal};
+use crate::{Map, Size, Tile, key::Key, tiles_equal};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TileConflict {
@@ -114,10 +115,11 @@ pub fn merge3(base: Option<&Map>, ours: &Map, theirs: &Map) -> Merged {
 
 #[cfg(test)]
 mod tests {
-    use base::{path::TreePath, types::Value};
+    use base::{coord::Coord, path::TreePath, types::Value};
+    use prefab::Prefab;
 
     use super::merge3;
-    use crate::{Coord, Map, Prefab, Size, Tile, parser::parse, tiles_equal, writer::write};
+    use crate::{Map, Size, Tile, parser::parse, tiles_equal, writer::write};
 
     fn map(source: &str) -> Map {
         let (map, errors) = parse(source);

@@ -1,7 +1,8 @@
-use base::types::Value;
+use base::{coord::Coord, types::Value};
 use std::{env, fs, path::PathBuf, time::Instant};
 
-use dmm::{Coord, MapFormat, PrefabInstanceId};
+use dmm::MapFormat;
+use prefab::PrefabInstanceId;
 
 use crate::{
     document::{MapDocument, selection::Selection},

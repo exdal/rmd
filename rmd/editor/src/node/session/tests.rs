@@ -1,10 +1,11 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::Prefab;
 
 use crate::{
     document::{MapDocument, grid::TileView},

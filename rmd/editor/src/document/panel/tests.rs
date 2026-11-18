@@ -1,9 +1,10 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::{error::Error, path::PathBuf};
 
 use dear_imgui_rs::Key;
-use dmm::{Coord, Map, MapFormat, Prefab, Size};
+use dmm::{Map, MapFormat, Size};
 use net::LevelContents;
+use prefab::Prefab;
 use ui::testing::{CONTEXT_LOCK, rectangle_context};
 
 use super::{

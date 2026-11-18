@@ -1,8 +1,8 @@
-use base::{path::TreePath, types::Identifier, vars};
+use base::{coord::Coord, path::TreePath, types::Identifier, vars};
 
 use dear_imgui_rs::{Key, MouseButton, PopupToken, Ui, WindowHoveredFlags};
-use dmm::{Coord, Prefab, PrefabInstanceId};
 use objtree::ObjectTree;
+use prefab::{Prefab, PrefabInstanceId};
 
 use super::edit::EditCommand;
 use crate::{

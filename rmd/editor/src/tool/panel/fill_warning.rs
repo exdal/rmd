@@ -1,7 +1,7 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
+use prefab::{Prefab, PrefabInstanceId};
 
 use dear_imgui_rs::Ui;
-use dmm::{Coord, Prefab};
 use ui::widgets::{DialogButton, begin_centered_modal, dialog_buttons};
 
 use crate::{
@@ -29,7 +29,7 @@ pub(crate) struct FillWarningContext {
     z: u32,
     mask: Option<SelectionMask>,
     prefab: Option<Prefab>,
-    focus: Option<dmm::PrefabInstanceId>,
+    focus: Option<PrefabInstanceId>,
 }
 
 impl FillWarningContext {
@@ -107,9 +107,10 @@ impl PendingFillWarning {
 
 #[cfg(test)]
 mod tests {
-    use base::path::TreePath;
+    use base::{coord::Coord, path::TreePath};
 
-    use dmm::{Coord, Prefab, Size};
+    use dmm::Size;
+    use prefab::Prefab;
 
     use super::{FillWarningContext, PendingFillWarning};
     use crate::{

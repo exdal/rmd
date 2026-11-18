@@ -1,10 +1,11 @@
-use dmm::{Coord, Prefab};
+use base::coord::Coord;
+use prefab::{Prefab, PrefabInstanceId};
 use render::SpriteInstance;
 
 use crate::palette::session::PrefabThumbnail;
 use crate::session::Session;
 use crate::{
-    document::{DocumentId, PrefabInstanceId, selection::Selection},
+    document::{DocumentId, selection::Selection},
     environment::Environment,
     frame::{self, visual},
     git::conflict::Side,
@@ -245,7 +246,7 @@ impl Session {
 mod tests {
     use base::{path::TreePath, types::Value};
 
-    use dmm::Prefab;
+    use prefab::Prefab;
 
     use crate::{
         session::{Session, fixtures::examples},

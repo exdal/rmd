@@ -4,147 +4,17 @@ pub mod merge;
 pub mod parser;
 pub mod writer;
 
-use base::{
-    bitset::BitIndex,
-    path::TreePath,
-    types::{Identifier, Value},
-};
-use std::{
-    collections::HashMap,
-    hash::{Hash, Hasher},
-    num::NonZeroU64,
-};
+use base::{coord::Coord, path::TreePath};
+use prefab::{Prefab, prefabs_equal};
+use std::collections::HashMap;
 
 use crate::key::Key;
-
-/// Stable runtime identity for one prefab placement in a map document.
-///
-/// Placement IDs are editor state and are not serialized into DMM files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PrefabInstanceId(NonZeroU64);
-
-impl PrefabInstanceId {
-    pub const fn from_raw(raw: u64) -> Option<Self> {
-        match NonZeroU64::new(raw) {
-            Some(raw) => Some(Self(raw)),
-            None => None,
-        }
-    }
-
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-impl BitIndex for PrefabInstanceId {
-    fn bit_index(self) -> usize {
-        self.get() as usize
-    }
-}
-
-/// DM counts `y` from the bottom
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Coord {
-    pub x: u32,
-    pub y: u32,
-    pub z: u32,
-}
-
-impl Coord {
-    pub fn new(x: u32, y: u32, z: u32) -> Self {
-        Self { x, y, z }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Size {
     pub x: u32,
     pub y: u32,
     pub z: u32,
-}
-
-/// `charge = 2e+005`, `damage = 1.30`, `network = list("ss13", "engine")`
-#[derive(Debug, Clone, PartialEq)]
-pub struct VarValue {
-    pub value: Value,
-    verbatim: Option<String>,
-}
-
-impl VarValue {
-    pub fn new(value: Value) -> Self {
-        Self { value, verbatim: None }
-    }
-
-    pub fn verbatim(&self) -> Option<&str> {
-        self.verbatim.as_deref()
-    }
-}
-
-impl Hash for VarValue {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.value.hash(state);
-    }
-}
-
-impl From<Value> for VarValue {
-    fn from(value: Value) -> Self {
-        Self::new(value)
-    }
-}
-
-/// Vars stay in file order
-#[derive(Debug, Clone, PartialEq, Hash)]
-pub struct Prefab {
-    pub path: TreePath,
-    pub vars: Vec<(Identifier, VarValue)>,
-}
-
-impl Prefab {
-    pub fn new(path: TreePath) -> Self {
-        Self { path, vars: Vec::new() }
-    }
-
-    pub fn var(&self, name: &Identifier) -> Option<&Value> {
-        self.vars.iter().find(|(key, _)| key == name).map(|(_, var)| &var.value)
-    }
-
-    pub fn set_var(&mut self, name: Identifier, value: Value) {
-        self.set(name, VarValue::new(value));
-    }
-
-    pub fn remove_var(&mut self, name: &Identifier) -> Option<VarValue> {
-        let index = self.vars.iter().position(|(key, _)| key == name)?;
-
-        Some(self.vars.remove(index).1)
-    }
-
-    pub(crate) fn set_var_from_source(&mut self, name: Identifier, value: Value, source: &str) {
-        let mut canonical = String::with_capacity(source.len());
-
-        let verbatim = match crate::writer::write_value(&mut canonical, &value) {
-            Ok(()) if canonical == source => None,
-            _ => Some(source.to_string()),
-        };
-
-        self.set(name, VarValue { value, verbatim });
-    }
-
-    fn set(&mut self, name: Identifier, var: VarValue) {
-        match self.vars.iter_mut().find(|(key, _)| *key == name) {
-            Some(slot) => slot.1 = var,
-            None => self.vars.push((name, var)),
-        }
-    }
-}
-
-pub fn prefabs_equal(left: &Prefab, right: &Prefab) -> bool {
-    left.path == right.path
-        && left.vars.len() == right.vars.len()
-        && left
-            .vars
-            .iter()
-            .zip(&right.vars)
-            .all(|((left_name, left), (right_name, right))| left_name == right_name && left.value == right.value)
 }
 
 pub type Tile = Vec<Prefab>;
@@ -328,10 +198,11 @@ impl Map {
 
 #[cfg(test)]
 mod tests {
-    use base::path::TreePath;
+    use base::{coord::Coord, path::TreePath};
+    use prefab::{Prefab, prefabs_equal};
     use std::hash::{BuildHasher, RandomState};
 
-    use crate::{Coord, Map, Prefab, Size, key::Key, parser::parse, prefabs_equal};
+    use crate::{Map, Size, key::Key, parser::parse};
 
     fn tile(path: &str) -> Vec<Prefab> {
         vec![Prefab::new(TreePath::parse(path))]
@@ -346,15 +217,15 @@ mod tests {
         for level in &mut map.grid {
             *level = vec![vec![floor, floor], vec![wall, floor]];
         }
-        let corner = crate::Coord::new(1, 1, 2);
+        let corner = Coord::new(1, 1, 2);
         assert_eq!(map.key_at(corner), Some(wall));
 
         map.resize(3, 4, space);
         assert_eq!((map.size.x, map.size.y, map.size.z), (3, 4, 2));
         assert_eq!(map.key_at(corner), Some(wall));
-        assert_eq!(map.key_at(crate::Coord::new(2, 2, 2)), Some(floor));
-        assert_eq!(map.key_at(crate::Coord::new(3, 1, 2)), Some(space));
-        assert_eq!(map.key_at(crate::Coord::new(1, 4, 1)), Some(space));
+        assert_eq!(map.key_at(Coord::new(2, 2, 2)), Some(floor));
+        assert_eq!(map.key_at(Coord::new(3, 1, 2)), Some(space));
+        assert_eq!(map.key_at(Coord::new(1, 4, 1)), Some(space));
         assert!(map.grid.iter().flatten().all(|row| row.len() == 3));
         assert!(map.grid.iter().all(|level| level.len() == 4));
 
@@ -465,37 +336,6 @@ mod tests {
     }
 
     #[test]
-    fn prefab_vars_keep_insertion_order_and_replace_in_place() {
-        let mut prefab = Prefab::new(TreePath::parse("/obj/t"));
-        prefab.set_var("name".into(), base::types::Value::Num(1.0));
-        prefab.set_var("id_tag".into(), base::types::Value::Num(2.0));
-        prefab.set_var("name".into(), base::types::Value::Num(3.0));
-
-        let names: Vec<&str> = prefab.vars.iter().map(|(name, _)| name.as_str()).collect();
-
-        assert_eq!(names, ["name", "id_tag"]);
-        assert_eq!(prefab.var(&"name".into()), Some(&base::types::Value::Num(3.0)));
-    }
-
-    #[test]
-    fn removing_a_prefab_var_preserves_the_order_of_the_rest() {
-        let mut prefab = Prefab::new(TreePath::parse("/obj/t"));
-        prefab.set_var("first".into(), base::types::Value::Num(1.0));
-        prefab.set_var("middle".into(), base::types::Value::Num(2.0));
-        prefab.set_var("last".into(), base::types::Value::Num(3.0));
-
-        assert_eq!(
-            prefab.remove_var(&"middle".into()).map(|var| var.value),
-            Some(base::types::Value::Num(2.0)),
-        );
-        assert_eq!(
-            prefab.vars.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
-            ["first", "last"],
-        );
-        assert_eq!(prefab.remove_var(&"missing".into()), None);
-    }
-
-    #[test]
     fn key_at_reads_the_bottom_row_as_y_one() {
         let mut map = Map::new(Size { x: 1, y: 2, z: 1 });
 
@@ -503,7 +343,7 @@ mod tests {
             row[0] = Key(7);
         }
 
-        assert_eq!(map.key_at(crate::Coord::new(1, 1, 1)), Some(Key(7)));
+        assert_eq!(map.key_at(Coord::new(1, 1, 1)), Some(Key(7)));
     }
 
     #[test]

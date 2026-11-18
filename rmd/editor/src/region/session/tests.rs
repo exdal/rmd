@@ -1,11 +1,11 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
-use dmm::{Coord, Prefab};
+use prefab::{Prefab, PrefabInstanceId};
 
 use vm::world::Position;
 
 use crate::{
-    document::{PrefabInstanceId, grid::TileView, selection::Selection},
+    document::{grid::TileView, selection::Selection},
     session::{
         BakeHold, FillOutcome, Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},

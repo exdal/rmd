@@ -1,8 +1,8 @@
+use base::coord::Coord;
 use dear_imgui_rs::{
     Condition, ListClipper, SelectableFlags, StyleColor, TableColumnFlags, TableFlags, TableSizingPolicy, Ui,
     WindowFlags,
 };
-use dmm::Coord;
 use ui::{
     icons::materialdesignicons::{ICON_ALERT, ICON_CIRCLE_SMALL, ICON_REFRESH, ICON_SOURCE_COMMIT},
     widgets::{

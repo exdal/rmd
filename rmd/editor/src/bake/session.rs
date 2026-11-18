@@ -3,12 +3,14 @@ use std::{collections::HashSet, mem};
 use render::FrameUpdate;
 use vm::profile::ProfileHook;
 
+use prefab::PrefabInstanceId;
+
 use crate::{
     bake::{
         self, BakeUpdate,
         worker::{self, Baked, BakedMap, Job},
     },
-    document::{DocumentId, PrefabInstanceId},
+    document::DocumentId,
     frame::{self, PrefabUpdate, options::FrameRenderOptions},
     maploader::preview::PREVIEW_ID_START,
 };

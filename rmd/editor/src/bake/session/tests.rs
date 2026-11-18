@@ -1,7 +1,8 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 use std::{mem, path::PathBuf};
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::{
     bake,
@@ -358,7 +359,7 @@ fn check_downstream_profile(checkout: &str, dme: &str, profile: &str) {
     }
 }
 
-fn downstream_instance(session: &Session, x: u32, y: u32, path: &str) -> crate::document::PrefabInstanceId {
+fn downstream_instance(session: &Session, x: u32, y: u32, path: &str) -> PrefabInstanceId {
     let document = session.state.active_document().unwrap();
     document
         .instance_ids_at(Coord::new(x, y, 1))
@@ -1215,7 +1216,7 @@ fn a_hidden_layer_manifold_draws_its_connections_above_the_floor() -> Result<(),
     assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics.entries);
     let environment = session.state.environment.as_ref().unwrap();
     let document = session.state.active_document().unwrap();
-    let resolved = |instance: crate::document::PrefabInstanceId| {
+    let resolved = |instance: PrefabInstanceId| {
         let prefab = document
             .prefab_instance(instance)
             .ok_or("prefab instance is missing")?

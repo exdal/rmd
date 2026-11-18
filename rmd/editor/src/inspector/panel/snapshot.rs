@@ -5,15 +5,12 @@ use base::{
 };
 use std::collections::{HashMap, HashSet};
 
-use dmm::{Prefab, error::MapErrorKind, parser::parse_value, writer::format_value};
+use dmm::{error::MapErrorKind, parser::parse_value, writer::format_value};
 use objtree::{ObjectTree, ResolvedVarType, TypeId};
+use prefab::{Prefab, PrefabInstanceId, PrefabLocation};
 
 use crate::{
-    app::external_editor::SourceLocation,
-    document::{PrefabInstanceId, instance::PrefabLocation},
-    frame::visual,
-    gizmo::direction::DirectionalTypes,
-    session::Session,
+    app::external_editor::SourceLocation, frame::visual, gizmo::direction::DirectionalTypes, session::Session,
 };
 
 use super::state::ListEntryDraft;
@@ -187,7 +184,7 @@ pub(super) fn property_snapshot(
         .vars
         .iter()
         .find(|(candidate, _)| candidate == &name)
-        .and_then(|(_, variable)| variable.verbatim())
+        .and_then(|(_, variable)| variable.spelling())
         .map(str::to_string)
         .unwrap_or_else(|| display_source(&value));
     let editor_text = property_editor_text(name.as_str(), &value, &source);
@@ -293,7 +290,7 @@ pub(super) fn inspector_variables(
         .map(|(name, variable)| InspectorVariable {
             name: name.clone(),
             source: variable
-                .verbatim()
+                .spelling()
                 .map_or_else(|| format_value(&variable.value), str::to_string),
             overridden: true,
             value: variable.value.clone(),

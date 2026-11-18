@@ -1,8 +1,10 @@
 use objtree::ObjectTree;
 
+use prefab::PrefabInstanceId;
+
 use crate::session::Session;
 use crate::{
-    document::{DocumentId, PrefabInstanceId, selection::Selection},
+    document::{DocumentId, selection::Selection},
     environment::world::World,
     search::{self, SearchQuery},
 };
@@ -66,9 +68,9 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use base::{path::TreePath, types::Value};
+    use base::{coord::Coord, path::TreePath, types::Value};
 
-    use dmm::{Coord, Prefab};
+    use prefab::Prefab;
 
     use crate::{
         search::SearchQuery,

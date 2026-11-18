@@ -1,9 +1,9 @@
 use std::{collections::HashSet, mem, path::Path, sync::Arc};
 
-use dmm::Prefab;
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::{
-    document::{DocumentId, MapDocument, PrefabInstanceId},
+    document::{DocumentId, MapDocument},
     frame::visual,
     maploader::{
         LoadedModule, OpenModule,

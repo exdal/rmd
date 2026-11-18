@@ -1,6 +1,7 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
-use dmm::{Coord, Map, Prefab, PrefabInstanceId, key::Key, parser, writer};
+use dmm::{Map, key::Key, parser, writer};
+use prefab::{Prefab, PrefabInstanceId};
 
 use super::Grid;
 use crate::document::{MapDocument, command::Edit, instance::PlacedTile};
@@ -239,6 +240,6 @@ aaab
         let grid = Grid::from_map(&map);
         let tile = grid.tile_at(Coord::new(2, 1, 1)).unwrap();
 
-        assert_eq!(tile[0].vars[0].1.verbatim(), Some("1.30"));
+        assert_eq!(tile[0].vars[0].1.spelling(), Some("1.30"));
     }
 }

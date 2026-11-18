@@ -1,4 +1,4 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::{
     cell::Cell,
     collections::{HashMap, VecDeque},
@@ -9,7 +9,7 @@ use std::{
 use dear_imgui_rs::{
     DockLayout, DockLayoutApply, DockNodeFlags, DockSplit, DockspaceError, Id, Ui, WindowKey, WindowKeyError,
 };
-use dmm::{Coord, PrefabInstanceId};
+use prefab::PrefabInstanceId;
 use render::{Camera, GuideLine, MapViewInteraction, MapViewRect};
 use ui::theme::Themes;
 

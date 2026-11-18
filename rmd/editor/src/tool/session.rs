@@ -1,12 +1,11 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 
-use dmm::{Coord, Prefab};
 use objtree::ObjectTree;
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::session::{FillOutcome, Session};
 use crate::{
     document::{
-        PrefabInstanceId,
         command::{Edit, EditGroupId, SelectionChange},
         instance::VarMutation,
     },

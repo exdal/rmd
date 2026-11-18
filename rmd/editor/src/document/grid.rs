@@ -1,15 +1,15 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::{
     collections::{HashMap, HashSet},
     mem,
     sync::Arc,
 };
 
-use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, Tile, key::Key, tiles_equal};
+use dmm::{Map, MapFormat, Size, Tile, key::Key, tiles_equal};
+use prefab::{Prefab, PrefabId, PrefabInstance, PrefabInstanceId, PrefabLocation, table::PrefabTable};
 
-use crate::document::{instance::PlacedPrefab, instance::PrefabInstance, instance::PrefabLocation};
+use crate::document::instance::PlacedPrefab;
 
-use table::{PrefabId, PrefabTable};
 pub use view::TileView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -580,7 +580,6 @@ fn paths(tile: TileView<'_>) -> Vec<&TreePath> {
     tile.iter().map(|prefab| &prefab.path).collect()
 }
 
-mod table;
 mod view;
 
 #[cfg(test)]

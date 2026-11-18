@@ -1,4 +1,4 @@
-use dmm::Coord;
+use base::coord::Coord;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TileAnchor {

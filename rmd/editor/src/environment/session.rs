@@ -9,8 +9,9 @@ use base::{
     vars,
 };
 
-use dmm::{Map, Prefab, error::MapError};
+use dmm::{Map, error::MapError};
 use objtree::{ObjectTree, TypeId};
+use prefab::Prefab;
 use render::texture::TextureCatalog;
 
 use crate::{

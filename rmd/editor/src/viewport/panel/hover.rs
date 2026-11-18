@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
+use base::coord::Coord;
 use dear_imgui_rs::{MouseButton, Ui};
-use dmm::Coord;
 use ui::icons::materialdesignicons::ICON_CIRCLE_SMALL;
 
 use super::ViewFrame;

@@ -229,10 +229,10 @@ fn a_load_result_settles_when_error_replaces_progress_in_the_same_window() {
 
 #[test]
 fn unknown_map_types_open_the_issues_panel_and_keep_their_overrides_when_saved() {
-    use base::{location::Location, path::TreePath};
+    use base::{coord::Coord, location::Location, path::TreePath};
     use std::sync::Arc;
 
-    use dmm::{Coord, MapFormat, writer::MapWriter};
+    use dmm::{MapFormat, writer::MapWriter};
 
     let _guard = ui::testing::CONTEXT_LOCK.lock().unwrap();
     let mut app = headless_editor();

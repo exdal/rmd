@@ -1,6 +1,7 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::Prefab;
 
 use super::validate_level;
 use crate::{

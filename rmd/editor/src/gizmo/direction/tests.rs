@@ -1,4 +1,5 @@
 use base::{
+    coord::Coord,
     location::Location,
     path::TreePath,
     types::{Identifier, Value},
@@ -6,8 +7,8 @@ use base::{
 use std::sync::Arc;
 
 use dmi::metadata::{Dir, IconState, Metadata};
-use dmm::Prefab;
 use objtree::ObjectTree;
+use prefab::Prefab;
 
 use super::{direction_mutation, directional_types_for};
 use crate::{
@@ -36,7 +37,7 @@ fn an_identical_scope_rotation_moves_every_matching_placement_to_the_new_subtype
         .state
         .active_document()
         .unwrap()
-        .instance_ids_at(dmm::Coord::new(1, 1, 1))[0];
+        .instance_ids_at(Coord::new(1, 1, 1))[0];
     session.pick_instance(Some(first));
 
     assert_eq!(
@@ -143,7 +144,7 @@ fn facing_several_picks_changes_the_path_of_directional_types_and_the_dir_of_the
                 .state
                 .active_document()
                 .unwrap()
-                .instance_ids_at(dmm::Coord::new(x, 1, 1))[0]
+                .instance_ids_at(Coord::new(x, 1, 1))[0]
         })
         .collect::<Vec<_>>();
     session.toggle_pick(ids[0]);

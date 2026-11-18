@@ -1,9 +1,10 @@
-use dmm::Coord;
+use base::coord::Coord;
 use objtree::{Roots, TypeId};
+use prefab::PrefabInstanceId;
 
 use crate::session::Session;
 use crate::{
-    document::{DocumentId, PrefabInstanceId},
+    document::DocumentId,
     focus::AreaFocus,
     frame::{self},
 };
@@ -107,9 +108,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use base::path::TreePath;
-
-    use dmm::Coord;
+    use base::{coord::Coord, path::TreePath};
 
     use crate::{
         document::grid::TileView,

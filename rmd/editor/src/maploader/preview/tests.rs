@@ -1,4 +1,4 @@
-use base::{arena::StrArena, path::TreePath};
+use base::{arena::StrArena, coord::Coord, path::TreePath};
 use std::{
     collections::HashSet,
     fs,
@@ -6,8 +6,9 @@ use std::{
     sync::Arc,
 };
 
-use dmm::{Coord, Map, PrefabInstanceId, Size};
+use dmm::{Map, Size};
 use objtree::{ObjectTree, TypeId};
+use prefab::PrefabInstanceId;
 use vm::{Fault, FaultKind, bake::ModuleRoot, world::Position};
 
 use super::{

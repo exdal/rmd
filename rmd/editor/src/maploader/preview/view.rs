@@ -1,12 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
-use dmm::{Coord, Prefab, PrefabInstanceId, Size, Tile};
+use base::coord::Coord;
+use dmm::{Size, Tile};
+use prefab::{Prefab, PrefabInstance, PrefabInstanceId, PrefabLocation};
 
-use crate::document::{
-    grid::{Grid, TileView},
-    instance::PrefabInstance,
-    instance::PrefabLocation,
-};
+use crate::document::grid::{Grid, TileView};
 
 #[derive(Debug, Default, Clone)]
 pub(super) struct OverlayTiles {

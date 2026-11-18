@@ -7,7 +7,8 @@ mod spec;
 pub mod texture;
 pub mod viewport;
 
-use dmm::{Coord, PrefabInstanceId};
+use base::coord::Coord;
+use prefab::PrefabInstanceId;
 
 pub use crate::{device::Device, error::GpuError, renderer::Renderer, viewport::SecondaryViewport};
 

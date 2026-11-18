@@ -1,7 +1,7 @@
 use std::{iter, ptr};
 
 use dear_imgui_rs::{Ui, sys};
-use dmm::{Prefab, prefabs_equal};
+use prefab::{Prefab, prefabs_equal};
 use ui::widgets::dpi;
 
 use crate::{

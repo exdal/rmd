@@ -1,5 +1,6 @@
+use base::coord::Coord;
 use dear_imgui_rs::Ui;
-use dmm::{Coord, merge::TileConflict};
+use dmm::merge::TileConflict;
 use ui::{icons::materialdesignicons::ICON_ARROW_RIGHT, widgets::opaque};
 
 use crate::{

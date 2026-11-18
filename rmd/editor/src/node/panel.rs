@@ -1,5 +1,5 @@
+use base::coord::Coord;
 use dear_imgui_rs::Ui;
-use dmm::Coord;
 use ui::widgets::dpi;
 
 use crate::{
@@ -190,7 +190,7 @@ pub(crate) fn draw_node_overlay(ui: &Ui, overlay: &NodeOverlay, view: NodeOverla
 
 #[cfg(test)]
 mod tests {
-    use dmm::Coord;
+    use base::coord::Coord;
 
     use super::{NodeOverlayHit, NodeRightClick, closest_node_connection, hit_node_overlay, node_right_click};
     use crate::{node::session::NodeOverlay, tool::Tool};

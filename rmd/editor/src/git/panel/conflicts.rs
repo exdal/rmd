@@ -1,7 +1,8 @@
+use base::coord::Coord;
 use dear_imgui_rs::{
     ItemHoveredFlags, ListClipper, SelectableFlags, TableColumnFlags, TableFlags, TableSizingPolicy, Ui,
 };
-use dmm::{Coord, merge::TileConflict};
+use dmm::merge::TileConflict;
 use ui::{
     icons::materialdesignicons::ICON_CHECK,
     widgets::{

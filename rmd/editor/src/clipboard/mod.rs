@@ -3,13 +3,14 @@ pub(crate) mod session;
 
 use std::collections::{HashMap, HashSet};
 
-use dmm::{Coord, Prefab, Tile};
+use base::coord::Coord;
+use dmm::Tile;
 use objtree::ObjectTree;
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::{
     document::{
-        MapDocument, PrefabInstanceId, command::Edit, grid::TileView, instance::PlacedPrefab, instance::PlacedTile,
-        selection::Selection,
+        MapDocument, command::Edit, grid::TileView, instance::PlacedPrefab, instance::PlacedTile, selection::Selection,
     },
     environment::world::{BaseTile, World},
     frame::options::HiddenTypes,

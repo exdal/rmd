@@ -1,13 +1,15 @@
 use std::collections::HashSet;
 
 use base::{
+    coord::Coord,
     location::Location,
     path::TreePath,
     types::{Identifier, ListEntry, Value, VarModifiers},
 };
 use dmi::metadata::Dir;
-use dmm::{Coord, Prefab, parser::parse_value, writer::format_value};
+use dmm::{parser::parse_value, writer::format_value};
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarDecl, VarTypeKind};
+use prefab::Prefab;
 
 use crate::{
     document::command::EditGroupId,

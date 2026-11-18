@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 
+use base::coord::Coord;
 use dear_imgui_rs::{MouseButton, Ui};
-use dmm::Coord;
 use ui::widgets::dpi;
 
 use super::{MapViewState, ViewFrame, stroke::ActivePlacementFlash};

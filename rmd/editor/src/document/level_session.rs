@@ -1,8 +1,8 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 
-use dmm::{Coord, Prefab};
 use net::{DeleteLevel, InsertAt, InsertLevel, LevelContents, LevelOp};
 use objtree::{ObjectTree, TypeId};
+use prefab::Prefab;
 
 use crate::session::{LevelChange, Session};
 use crate::{

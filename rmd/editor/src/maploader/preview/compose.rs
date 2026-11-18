@@ -1,4 +1,4 @@
-use base::file_path;
+use base::{coord::Coord, file_path};
 use std::{
     array,
     cmp::Reverse,
@@ -7,8 +7,9 @@ use std::{
     sync::Arc,
 };
 
-use dmm::{Coord, Map, Prefab, PrefabInstanceId, Size};
+use dmm::{Map, Size};
 use objtree::{ObjectTree, TypeId};
+use prefab::{Prefab, PrefabInstanceId};
 use vm::bake::ModuleRoot;
 
 use super::{

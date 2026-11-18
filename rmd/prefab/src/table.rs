@@ -3,10 +3,7 @@ use std::{
     hash::{BuildHasher, RandomState},
 };
 
-use dmm::{Prefab, prefabs_equal};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct PrefabId(u32);
+use crate::{Prefab, PrefabId, prefabs_equal};
 
 #[derive(Debug, Clone)]
 struct Entry {
@@ -16,14 +13,14 @@ struct Entry {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct PrefabTable {
+pub struct PrefabTable {
     entries: Vec<Entry>,
     index: HashMap<u64, Vec<PrefabId>>,
     hasher: RandomState,
 }
 
 impl PrefabTable {
-    pub(crate) fn intern(&mut self, prefab: &Prefab) -> PrefabId {
+    pub fn intern(&mut self, prefab: &Prefab) -> PrefabId {
         let Self { entries, index, hasher } = self;
         let bucket = index.entry(hasher.hash_one(prefab)).or_default();
         if let Some(id) = bucket
@@ -45,7 +42,7 @@ impl PrefabTable {
         id
     }
 
-    pub(crate) fn find(&self, prefab: &Prefab) -> Option<PrefabId> {
+    pub fn find(&self, prefab: &Prefab) -> Option<PrefabId> {
         self.index
             .get(&self.hasher.hash_one(prefab))?
             .iter()
@@ -53,16 +50,16 @@ impl PrefabTable {
             .find(|id| prefabs_equal(self.get(*id), prefab))
     }
 
-    pub(crate) fn get(&self, id: PrefabId) -> &Prefab {
+    pub fn get(&self, id: PrefabId) -> &Prefab {
         &self.entry(id).prefab
     }
 
-    pub(crate) fn place(&mut self, id: PrefabId) {
+    pub fn place(&mut self, id: PrefabId) {
         let entry = self.entry_mut(id);
         entry.placed = entry.placed.checked_add(1).expect("placement count overflow");
     }
 
-    pub(crate) fn unplace(&mut self, id: PrefabId) {
+    pub fn unplace(&mut self, id: PrefabId) {
         let entry = self.entry_mut(id);
         entry.placed = entry
             .placed
@@ -70,23 +67,22 @@ impl PrefabTable {
             .expect("unplaced a prefab that was never placed");
     }
 
-    pub(crate) fn placed(&self, id: PrefabId) -> u32 {
+    pub fn placed(&self, id: PrefabId) -> u32 {
         self.entry(id).placed
     }
 
-    pub(crate) fn pin(&mut self, id: PrefabId) {
+    pub fn pin(&mut self, id: PrefabId) {
         self.entry_mut(id).pinned = true;
     }
 
-    pub(crate) fn live(&self) -> impl Iterator<Item = &Prefab> {
+    pub fn live(&self) -> impl Iterator<Item = &Prefab> {
         self.entries
             .iter()
             .filter(|entry| entry.placed > 0 || entry.pinned)
             .map(|entry| &entry.prefab)
     }
 
-    #[cfg(test)]
-    pub(crate) fn placed_entries(&self) -> usize {
+    pub fn placed_entries(&self) -> usize {
         self.entries.iter().filter(|entry| entry.placed > 0).count()
     }
 

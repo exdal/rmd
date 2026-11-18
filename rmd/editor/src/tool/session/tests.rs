@@ -1,9 +1,9 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
-use dmm::{Coord, Prefab};
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::{
-    document::{PrefabInstanceId, command::EditGroupId, grid::TileView},
+    document::{command::EditGroupId, grid::TileView},
     session::{
         FillOutcome, Session,
         fixtures::{area_at, examples, flat_session, focus_session},

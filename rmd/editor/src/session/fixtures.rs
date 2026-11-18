@@ -1,4 +1,5 @@
 use base::{
+    coord::Coord,
     path::TreePath,
     types::{Identifier, Value},
 };
@@ -7,7 +8,8 @@ use std::{
     sync::Arc,
 };
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::{Prefab, PrefabInstanceId};
 use render::{FrameUpdate, SpriteInstance};
 
 use super::{DocumentCache, Session};
@@ -16,7 +18,7 @@ use crate::git::{
     diff::session::{DiffSide, DiffState},
 };
 use crate::{
-    document::{DocumentId, MapDocument, PrefabInstanceId},
+    document::{DocumentId, MapDocument},
     environment::{Environment, progress::Progress},
     git::{
         blame::BlameResult,
@@ -122,7 +124,7 @@ impl Session {
         let bake = self.active_cache().bake.as_ref();
         let size = grid.size();
         let mut positions = (1..=size.x)
-            .flat_map(|x| (1..=size.y).flat_map(move |y| (1..=size.z).map(move |z| dmm::Coord::new(x, y, z))))
+            .flat_map(|x| (1..=size.y).flat_map(move |y| (1..=size.z).map(move |z| Coord::new(x, y, z))))
             .flat_map(|coord| grid.ids_at(coord).to_vec())
             .filter(|id| id.get() >= crate::maploader::preview::PREVIEW_ID_START)
             .map(|id| (id.get(), bake.and_then(|bake| bake.position(id.get()))))

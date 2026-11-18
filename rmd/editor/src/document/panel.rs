@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
+use base::coord::Coord;
 use dear_imgui_rs::{DragFlags, Ui};
-use dmm::{Coord, MapFormat, Prefab, Size};
+use dmm::{MapFormat, Size};
+use prefab::Prefab;
 use ui::{
     icons::materialdesignicons::ICON_DOTS_HORIZONTAL,
     widgets::{DialogButton, begin_centered_modal, dialog_buttons, dpi},

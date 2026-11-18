@@ -1,4 +1,5 @@
-use dmm::{Coord, Size};
+use base::coord::Coord;
+use dmm::Size;
 use render::Camera;
 
 pub fn clamp_zoom(zoom: f32) -> f32 {
@@ -114,7 +115,8 @@ impl Controller {
 
 #[cfg(test)]
 mod tests {
-    use dmm::{Coord, Size};
+    use base::coord::Coord;
+    use dmm::Size;
 
     use super::Controller;
 

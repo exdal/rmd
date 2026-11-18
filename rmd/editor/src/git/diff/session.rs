@@ -1,6 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
-use dmm::{Coord, Map};
+use base::coord::Coord;
+use dmm::Map;
 
 use crate::session::{Session, SharedHighlights};
 use crate::{
@@ -222,7 +223,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use dmm::Coord;
+    use base::coord::Coord;
 
     use crate::{
         git::diff::{ChangeKind, MODIFIED_COLOR},

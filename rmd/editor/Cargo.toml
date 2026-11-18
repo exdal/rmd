@@ -19,6 +19,7 @@ ir.workspace = true
 codegen.workspace = true
 vm.workspace = true
 dmm.workspace = true
+prefab.workspace = true
 dmi.workspace = true
 net.workspace = true
 render.workspace = true

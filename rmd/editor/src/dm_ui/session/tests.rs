@@ -1,15 +1,16 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
 };
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::{Prefab, PrefabInstanceId};
 use vm::profile::ProfileHook;
 
 use crate::{
     bake::session::FaultState,
-    document::{DocumentId, MapDocument, PrefabInstanceId},
+    document::{DocumentId, MapDocument},
     session::{
         Session,
         fixtures::{

@@ -1,4 +1,4 @@
-use base::vars;
+use base::{coord::Coord, vars};
 use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},
@@ -6,12 +6,12 @@ use std::{
 
 use defines::{EFFECTS_LAYER, FLOAT_LAYER, KEEP_APART, KEEP_TOGETHER};
 use dmi::metadata::Metadata;
-use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
+use prefab::{Prefab, PrefabInstanceId};
 use render::{SpriteInstance, SpriteTexture, texture::TextureCatalog};
 use vm::bake::SharedAppearance;
 
-use crate::{document::PrefabInstanceId, environment::world::Perspective, maploader::preview::MapView};
+use crate::{environment::world::Perspective, maploader::preview::MapView};
 
 use super::{
     PlacementOrder, RenderedPrefab, TypeVisibility,

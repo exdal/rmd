@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use dmm::{Coord, Prefab, Tile, merge::TileConflict, tiles_equal};
+use base::coord::Coord;
+use dmm::{Tile, merge::TileConflict, tiles_equal};
+use prefab::Prefab;
 
 use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},
@@ -367,9 +369,10 @@ impl ConflictState {
 
 #[cfg(test)]
 mod tests {
-    use base::path::TreePath;
+    use base::{coord::Coord, path::TreePath};
 
-    use dmm::{Coord, Map, Prefab, Size, merge::TileConflict};
+    use dmm::{Map, Size, merge::TileConflict};
+    use prefab::Prefab;
 
     use super::{ConflictData, ConflictState, Side};
     use crate::document::{MapDocument, command::EditGroupId};

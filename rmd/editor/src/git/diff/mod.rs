@@ -2,7 +2,9 @@ pub(crate) mod session;
 
 use std::collections::{HashMap, HashSet};
 
-use dmm::{Coord, Map, Prefab, Size, Tile, key::Key, prefabs_equal, tiles_equal};
+use base::coord::Coord;
+use dmm::{Map, Size, Tile, key::Key, tiles_equal};
+use prefab::{Prefab, prefabs_equal};
 
 use crate::{
     bake::{HIGHLIGHT_ALWAYS, Highlight, highlight_tiles},

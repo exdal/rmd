@@ -7,7 +7,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use dmm::Prefab;
+use prefab::Prefab;
 
 use crate::{
     environment::{BakeProgram, Environment},

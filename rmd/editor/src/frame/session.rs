@@ -1,10 +1,12 @@
-use dmm::{Coord, Prefab, Size};
+use base::coord::Coord;
+use dmm::Size;
 use objtree::{Roots, TypeId};
+use prefab::{Prefab, PrefabInstanceId};
 use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, SpritePreview};
 
 use crate::session::Session;
 use crate::{
-    document::{DocumentId, PrefabInstanceId, selection::Selection},
+    document::{DocumentId, selection::Selection},
     focus::AreaFocus,
     frame::{
         self, FrameInstances, PrefabUpdate,

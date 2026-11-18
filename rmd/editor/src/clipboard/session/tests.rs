@@ -1,10 +1,11 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::{
     clipboard::PasteMerge,
-    document::{MapDocument, PrefabInstanceId, grid::TileView, instance::PlacedPrefab, selection::Selection},
+    document::{MapDocument, grid::TileView, instance::PlacedPrefab, selection::Selection},
     session::{
         Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session},

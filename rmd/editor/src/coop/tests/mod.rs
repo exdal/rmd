@@ -1,4 +1,4 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::{
     env, fs,
     net::{Ipv4Addr, SocketAddr},
@@ -7,11 +7,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dmm::{Coord, Prefab, parser};
+use dmm::parser;
 use net::{
     CodebaseHash, CodebaseId, Cursor, DeleteLevel, Direction, Event, GenerationId, Impairment, InsertAt, InsertLevel,
     LevelContents, LevelOp, LossyProxy, PeerId, PeerInfo, SeqId, Server, ServerConfig, View,
 };
+use prefab::Prefab;
 
 use super::*;
 use crate::{

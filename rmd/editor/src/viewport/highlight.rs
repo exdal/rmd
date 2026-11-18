@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use dmm::Coord;
+use base::coord::Coord;
+use prefab::PrefabInstanceId;
 
 use crate::session::{Session, SharedHighlights};
 use crate::{
     bake::{Bake, HIGHLIGHT_ALWAYS, HIGHLIGHT_HOVERED, HIGHLIGHT_SELECTED, Highlight, highlight_tiles},
-    document::{DocumentId, PrefabInstanceId},
+    document::DocumentId,
     git::blame::BlameCell,
 };
 
@@ -172,8 +173,9 @@ mod tests {
     use base::{location::Location, path::TreePath};
     use std::sync::Arc;
 
-    use dmm::{Map, Prefab, Size};
+    use dmm::{Map, Size};
     use objtree::ObjectTree;
+    use prefab::Prefab;
 
     use super::*;
     use crate::{

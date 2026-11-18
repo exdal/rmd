@@ -1,11 +1,11 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
+use prefab::PrefabInstanceId;
 use std::collections::HashSet;
 
 use dear_imgui_rs::{
     Condition, ListClipper, SelectableFlags, TableColumnFlags, TableFlags, TableSizingPolicy, Ui, WindowKey,
     WindowKeyError,
 };
-use dmm::Coord;
 use objtree::ObjectTree;
 use ui::widgets::{
     button_width, centered_note, checkbox_width, focus_window_on_hover, overflow_scroll, same_line_if_fits,
@@ -13,12 +13,8 @@ use ui::widgets::{
 };
 
 use crate::{
-    document::{DocumentId, PrefabInstanceId},
-    frontend::welcome::codebase_relative,
-    issues,
-    object_tree::panel::type_search::draw_type_path_search,
-    search::panel::JumpTarget,
-    session::Session,
+    document::DocumentId, frontend::welcome::codebase_relative, issues,
+    object_tree::panel::type_search::draw_type_path_search, search::panel::JumpTarget, session::Session,
     settings::Settings,
 };
 

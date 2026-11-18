@@ -1,13 +1,11 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::collections::BTreeMap;
 
-use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::{
-    document::{
-        MapDocument, PrefabInstanceId, command::Edit, grid::TileView, instance::PlacedPrefab, instance::PlacedTile,
-    },
+    document::{MapDocument, command::Edit, grid::TileView, instance::PlacedPrefab, instance::PlacedTile},
     environment::world::{BaseTile, World},
     frame::options::HiddenTypes,
 };

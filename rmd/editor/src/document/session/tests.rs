@@ -1,8 +1,9 @@
 use std::slice;
 
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
-use dmm::{Coord, Map, MapFormat, Prefab, Size};
+use dmm::{Map, MapFormat, Size};
+use prefab::Prefab;
 
 use crate::{
     document::{MapDocument, command::Edit, grid::TileView},

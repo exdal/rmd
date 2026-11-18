@@ -1,4 +1,4 @@
-use dmm::PrefabInstanceId;
+use prefab::PrefabInstanceId;
 use vir::{Buffer, FrameAllocator, ValueId};
 
 use super::{
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn picked_owners_are_sorted_by_high_word_then_low_word_without_duplicates() {
-        let id = |raw| dmm::PrefabInstanceId::from_raw(raw).unwrap();
+        let id = |raw| PrefabInstanceId::from_raw(raw).unwrap();
         let picked = [id(1 << 32), id(5), id(1 << 32), id(2 | (1 << 32)), id(3)];
 
         assert_eq!(sorted_picked_owners(&picked), vec![[3, 0], [5, 0], [0, 1], [2, 1]],);

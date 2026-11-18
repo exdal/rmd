@@ -1,5 +1,5 @@
+use base::coord::Coord;
 use dear_imgui_rs::{DrawListMut, Ui};
-use dmm::Coord;
 use render::Renderer;
 use ui::widgets::dpi;
 
@@ -344,7 +344,7 @@ fn placement_preview_opacity(time: f64) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use dmm::Coord;
+    use base::coord::Coord;
     use render::SpriteTexture;
 
     use super::{OverlayRect, placement_preview_bounds, placement_preview_opacity};

@@ -1,12 +1,13 @@
 use base::{
+    coord::Coord,
     path::TreePath,
     types::{Identifier, Value},
     vars,
 };
 
 use dmi::metadata::Dir;
-use dmm::{Coord, Prefab};
 use objtree::{ObjectTree, TypeId};
+use prefab::Prefab;
 
 use crate::{document::selection::Selection, frame::visual};
 

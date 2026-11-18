@@ -812,6 +812,7 @@ name = "dmm"
 version = "1.2.1"
 dependencies = [
  "base",
+ "prefab",
 ]
 
 [[package]]
@@ -862,6 +863,7 @@ dependencies = [
  "net",
  "objtree",
  "png",
+ "prefab",
  "preprocessor",
  "raw-window-handle",
  "render",
@@ -3127,6 +3129,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
+name = "prefab"
+version = "1.0.0"
+dependencies = [
+ "base",
+]
+
+[[package]]
 name = "prelude"
 version = "1.2.0"
 
@@ -3427,10 +3436,11 @@ name = "render"
 version = "1.13.0"
 dependencies = [
  "ash",
+ "base",
  "dear-imgui-rs",
  "dmi",
- "dmm",
  "log",
+ "prefab",
  "raw-window-handle",
  "raw-window-metal",
  "shader-slang",

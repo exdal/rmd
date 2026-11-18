@@ -1,4 +1,5 @@
 use base::{
+    coord::Coord,
     location::{FileId, Location, Position},
     path::TreePath,
     types::Value,
@@ -12,8 +13,9 @@ use dmi::{
     IconFile,
     metadata::{IconState, Metadata},
 };
-use dmm::{Coord, Map, MapFormat, Prefab, Size, writer::MapWriter};
+use dmm::{Map, MapFormat, Size, writer::MapWriter};
 use objtree::ObjectTree;
+use prefab::Prefab;
 
 use super::{
     DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS, build_textures, discover_maps, preprocess_severity,

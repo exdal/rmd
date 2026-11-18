@@ -1,11 +1,12 @@
 use base::{
+    coord::Coord,
     types::{Identifier, Value},
     vars,
 };
 
 use dear_imgui_rs::{ChildFlags, DragFlags, StyleColor, TableFlags, TableSizingPolicy, Ui};
 use dmi::metadata::Dir;
-use dmm::{Coord, parser::parse_value, writer::format_value};
+use dmm::{parser::parse_value, writer::format_value};
 use ui::{color::byte, widgets::text_wrapped_colored};
 
 use crate::{

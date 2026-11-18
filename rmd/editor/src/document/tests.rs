@@ -1,9 +1,10 @@
 use base::{path::TreePath, types::Value};
 use std::{collections::HashSet, env, error::Error, fs, process, ptr};
 
-use dmm::{Map, MapFormat, Prefab, Size, parser, writer::MapWriter};
+use dmm::{Map, MapFormat, Size, parser, writer::MapWriter};
 use net::{LevelChange, LevelContents};
 use objtree::ObjectTree;
+use prefab::Prefab;
 
 use super::{Coord, MapDocument, instance::VarMutation, sanitize_vars, selection::Selection};
 use crate::{

@@ -4,7 +4,8 @@ use std::{
 };
 
 use base::path::TreePath;
-use dmm::{Map, MapFormat, Prefab, Size};
+use dmm::{Map, MapFormat, Size};
+use prefab::Prefab;
 
 use crate::git::session::GitDocState;
 use crate::{coop::LevelStep, session::Session, tool::session::is_reorder_label};

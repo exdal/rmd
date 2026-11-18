@@ -4,7 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use dmm::{Coord, Map};
+use base::coord::Coord;
+use dmm::Map;
 
 use crate::session::{Session, SharedHighlights};
 use crate::{

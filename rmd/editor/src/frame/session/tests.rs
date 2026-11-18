@@ -1,6 +1,7 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::Prefab;
 
 use crate::{
     bake::session::MAX_PENDING_UPDATES,

@@ -1,7 +1,7 @@
 use base::path::TreePath;
 
-use dmm::Prefab;
 use objtree::TypeId;
+use prefab::Prefab;
 use render::{SpriteTexture, texture::TextureCatalog};
 
 use crate::{

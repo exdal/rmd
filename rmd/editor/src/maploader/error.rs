@@ -1,6 +1,7 @@
 use std::{fmt, path::PathBuf};
 
-use dmm::{Coord, error::MapError};
+use base::coord::Coord;
+use dmm::error::MapError;
 
 use super::MAX_NESTING;
 

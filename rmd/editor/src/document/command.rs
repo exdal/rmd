@@ -4,8 +4,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use dmm::{Coord, PrefabInstanceId};
+use base::coord::Coord;
 use net::LevelChange;
+use prefab::PrefabInstanceId;
 
 use crate::{
     document::{

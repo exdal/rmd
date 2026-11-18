@@ -4,8 +4,8 @@ use base::{
 };
 
 use defines::{FLOAT_PLANE, RESET_ALPHA, RESET_COLOR, RESET_TRANSFORM, SOUTH};
-use dmm::Prefab;
 use objtree::{ObjectTree, TypeId};
+use prefab::Prefab;
 use ui::color::byte;
 use vm::matrix::Matrix;
 

@@ -1,6 +1,7 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
-use dmm::{Coord, Map, Prefab, Size, Tile};
+use dmm::{Map, Size, Tile};
+use prefab::Prefab;
 
 use super::{ChangeKind, LineKind, VarChange, Version, diff, restore_edit, tile_lines};
 use crate::document::{MapDocument, grid::TileView};

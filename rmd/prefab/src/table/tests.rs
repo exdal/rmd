@@ -1,6 +1,6 @@
 use base::{path::TreePath, types::Value};
 
-use dmm::Prefab;
+use crate::Prefab;
 
 use super::PrefabTable;
 

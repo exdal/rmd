@@ -4,7 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use dmm::{Coord, Prefab, PrefabInstanceId};
+use base::coord::Coord;
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::{
     document::grid::Grid,
