@@ -83,6 +83,7 @@ fn palette_thumbnails_fall_back_to_a_standalone_bake_when_no_sprite_matches() {
         module: codegen::generate(&module).expect("codegen"),
         profile: selected_profile,
         icon_states: Default::default(),
+        uses_external_libraries: false,
     });
     assert!(environment.load_icons(&[], &Progress::new()).is_empty());
 

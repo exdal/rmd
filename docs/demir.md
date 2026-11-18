@@ -339,10 +339,19 @@ A UI frame allows 4,096 commands and 16 nested windows or nodes. Labels can cont
 Text values can contain 1,024 characters. One atom can declare 16 highlights. One highlight can
 contain 16,384 tiles and a 64-character label.
 
-The VM blocks native libraries, networking, sleep, timers, and interactive input. A bake is a
+The VM blocks networking, sleep, timers, and interactive input. A bake is a
 snapshot taken before deferred work runs, so a `spawn` evaluates its delay and skips its body. File
 reads reach only files under the codebase directory. `catch` can handle DM throws and the
 `/exception` that `demir_toml_decode` throws. It cannot consume sandbox or resource faults.
+
+Native libraries run only in a codebase the user trusts. When a codebase's bake code calls
+`call_ext()` or `load_ext()`, the editor asks whether to trust it. Otherwise both calls are a
+runtime errors, so check `demir_trusted()` first. The VM supports the classic text convention,
+`char *foo(int argc, char *argv[])`, but not Byondapi (because it keeps breaking, surprise).
+A library is looked up under the codebase directory, then in `~/.byond/bin` on Unix, and a name
+with a `64` suffix is tried first (`rust_g64.dll`, `librust_g64.so`). A loaded library stays
+loaded until the editor exits. During a call the working directory is the `.dme`'s directory,
+so a library resolves relative paths there.
 
 Random values use a seed based on the target atom's type and coordinates. Repeating a bake for the
 same atom gives the same random sequence. World time and tick usage are deterministic.

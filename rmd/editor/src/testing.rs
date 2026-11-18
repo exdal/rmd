@@ -85,6 +85,7 @@ pub(crate) fn compile_environment(prelude: &[(&'static str, &'static str)]) -> E
         module: codegen::generate(&module).expect("codegen"),
         profile,
         icon_states: Default::default(),
+        uses_external_libraries: false,
     });
 
     environment

@@ -108,6 +108,7 @@ impl App {
             copy_to_clipboard: output.copy_to_clipboard,
             reload_profile: output.reload_profile,
             load_conflicts: output.load_conflicts,
+            trust: output.trust,
             demand,
         })
     }

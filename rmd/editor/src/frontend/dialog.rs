@@ -46,6 +46,14 @@ const EXIT_POPUP: &str = "Unsaved changes##exit";
 
 const RELOAD_CONFLICTS_POPUP: &str = "Load merge conflicts##reload-conflicts";
 
+const TRUST_POPUP: &str = "Untrusted codebase##trust";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrustDecision {
+    Trust,
+    Decline,
+}
+
 pub(crate) fn draw_keybind_preset_dialog(ui: &Ui, open: &mut bool) -> Option<KeybindPreset> {
     if !*open {
         return None;
@@ -279,6 +287,42 @@ impl UiState {
         }
 
         load_conflicts
+    }
+
+    pub(super) fn draw_trust_popup(&mut self, ui: &Ui) -> Option<TrustDecision> {
+        let path = self.trust_prompt.as_ref()?;
+        if !ui.is_popup_open(TRUST_POPUP) {
+            ui.open_popup(TRUST_POPUP);
+        }
+
+        let _modal = begin_centered_modal(
+            ui,
+            TRUST_POPUP,
+            WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_SAVED_SETTINGS,
+        )?;
+        ui.text_disabled(path.display().to_string());
+        ui.text("This codebase calls external libraries (call_ext/load_ext).");
+        ui.text("They run native code on this computer and could be malicious.");
+        ui.text("Without trust, maps still open and edit, but external calls are blocked.");
+        ui.text("Do you trust this codebase?");
+        let pressed = dialog_buttons(
+            ui,
+            &[
+                DialogButton::cancel("Don't Trust"),
+                DialogButton::destructive("Trust", false),
+            ],
+            true,
+        );
+        let decision = pressed.map(|index| match index {
+            1 => TrustDecision::Trust,
+            _ => TrustDecision::Decline,
+        });
+        if decision.is_some() {
+            self.trust_prompt = None;
+            ui.close_current_popup();
+        }
+
+        decision
     }
 
     pub(super) fn draw_new_map(&mut self, ui: &Ui, session: &mut Session, open: bool) -> bool {

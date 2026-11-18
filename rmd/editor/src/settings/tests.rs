@@ -52,6 +52,7 @@ fn defaults_preserve_existing_editor_behavior() {
             object_tree_filter: ObjectTreeFilterOptions::default(),
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
+            trusted_codebases: Vec::new(),
             recent: Vec::new(),
             profile_selections: Vec::new(),
             forced_profile_selections: Vec::new(),
@@ -233,6 +234,27 @@ fn missing_fields_use_their_defaults() {
 }
 
 #[test]
+fn trusting_a_codebase_is_remembered_by_absolute_path() {
+    let mut settings = Settings::default();
+    assert!(!settings.is_trusted(Path::new("station.dme")));
+
+    settings.trust_codebase(Path::new("station.dme"));
+    settings.trust_codebase(Path::new("station.dme"));
+
+    assert!(settings.is_trusted(Path::new("station.dme")));
+    assert!(settings.is_trusted(&absolute(Path::new("station.dme"))));
+    assert!(!settings.is_trusted(Path::new("other.dme")));
+    assert_eq!(settings.trusted_codebases.len(), 1);
+}
+
+#[test]
+fn settings_written_before_trusted_codebases_existed_still_load() {
+    let settings: Settings = toml::from_str("recent_codebases = []\n").unwrap();
+
+    assert!(settings.trusted_codebases.is_empty());
+}
+
+#[test]
 fn older_keybinding_tables_receive_new_action_defaults() {
     let mut stored = toml::Value::try_from(KeyBindings::default()).unwrap();
     let table = stored.as_table_mut().unwrap();
@@ -379,6 +401,7 @@ fn settings_round_trip_through_toml() {
         },
         keybindings: KeyBindings::default(),
         recent_codebases: Vec::new(),
+        trusted_codebases: Vec::new(),
         recent: Vec::new(),
         profile_selections: vec![ProfileSelection {
             environment: PathBuf::from("/project/station.dme"),
@@ -466,6 +489,7 @@ fn frame_options_apply_and_capture_without_touching_other_settings() {
         object_tree_filter: ObjectTreeFilterOptions::default(),
         keybindings: KeyBindings::default(),
         recent_codebases: Vec::new(),
+        trusted_codebases: Vec::new(),
         recent: Vec::new(),
         profile_selections: Vec::new(),
         forced_profile_selections: Vec::new(),

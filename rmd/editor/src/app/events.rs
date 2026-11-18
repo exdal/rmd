@@ -156,6 +156,10 @@ impl ApplicationHandler for App {
                     self.load_conflicts(id);
                 }
 
+                if let Some(decision) = redraw.trust {
+                    self.decide_trust(decision);
+                }
+
                 if let Some(source) = redraw.open_source {
                     self.open_source(source);
                 }

@@ -28,6 +28,8 @@ fn headless_editor() -> App {
         pending_map: None,
         pending_reload: None,
         pending_share: None,
+        pending_trust: None,
+        declined_trust: HashSet::new(),
         retry_coop_after_load: false,
         deferred_job: None,
         settings_ready: true,
@@ -425,4 +427,48 @@ fn opening_an_already_open_map_focuses_it_without_loading() {
     assert!(!app.loader.is_busy());
     assert_eq!(app.session.state.document_ids().len(), 2);
     let _ = fs::remove_dir_all(dir);
+}
+
+fn loaded_codebase_calling_external_libraries() -> LoadedCodebase {
+    let mut environment = crate::testing::compile_environment(&[(
+        "<test-profile-default.dm>",
+        "/datum/demir/test\n    default = TRUE\n",
+    )]);
+    environment.bake_program.as_mut().unwrap().uses_external_libraries = true;
+
+    LoadedCodebase {
+        environment,
+        diagnostics: Default::default(),
+        textures: Default::default(),
+        thumbnails: Default::default(),
+        maps: Vec::new(),
+    }
+}
+
+#[test]
+fn a_codebase_calling_external_libraries_waits_for_a_trust_decision() {
+    let _guard = ui::testing::CONTEXT_LOCK.lock().unwrap();
+    let mut app = headless_editor();
+    let path = PathBuf::from("untrusted.dme");
+
+    app.apply_outcome(Outcome::Codebase {
+        path: path.clone(),
+        loaded: Box::new(loaded_codebase_calling_external_libraries()),
+    });
+    assert!(app.session.state.environment.is_none());
+    assert_eq!(app.ui.trust_prompt, Some(path.clone()));
+    assert!(app.pending_trust.is_some());
+
+    app.decide_trust(TrustDecision::Decline);
+    assert!(app.session.state.environment.is_some());
+    assert!(app.ui.trust_prompt.is_none());
+    assert!(app.pending_trust.is_none());
+    assert!(app.declined_trust.contains(&path));
+    assert!(!app.settings.is_trusted(&path));
+
+    app.apply_outcome(Outcome::Codebase {
+        path,
+        loaded: Box::new(loaded_codebase_calling_external_libraries()),
+    });
+    assert!(app.pending_trust.is_none(), "a declined codebase is not asked again");
 }

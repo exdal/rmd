@@ -11,6 +11,7 @@ mod tests;
 pub(crate) mod update;
 
 use std::{
+    collections::HashSet,
     fs, mem,
     path::{Path, PathBuf},
     process::ExitCode,
@@ -35,9 +36,9 @@ use crate::{
         compile::BakeOptions,
         panel::LoadNotice,
         session::LoadReport,
-        worker::{Job, Loader, Outcome},
+        worker::{Job, LoadedCodebase, Loader, Outcome},
     },
-    frontend::{OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState},
+    frontend::{OpenRequest, ProfileReload, ScreenshotArea, ScreenshotRequest, UiState, dialog::TrustDecision},
     session::Session,
     settings::{
         Settings,
@@ -144,6 +145,8 @@ pub(crate) fn run() -> ExitCode {
         pending_map,
         pending_reload: None,
         pending_share: None,
+        pending_trust: None,
+        declined_trust: HashSet::new(),
         retry_coop_after_load: false,
         deferred_job,
         settings_ready,
@@ -206,6 +209,7 @@ struct Redraw {
     copy_to_clipboard: Option<String>,
     reload_profile: Option<ProfileReload>,
     load_conflicts: Option<DocumentId>,
+    trust: Option<TrustDecision>,
     demand: FrameDemand,
 }
 
@@ -227,6 +231,8 @@ struct App {
     pending_map: Option<PendingMap>,
     pending_reload: Option<DocumentId>,
     pending_share: Option<PathBuf>,
+    pending_trust: Option<(PathBuf, Box<LoadedCodebase>)>,
+    declined_trust: HashSet<PathBuf>,
     retry_coop_after_load: bool,
     deferred_job: Option<Job>,
     settings_ready: bool,
@@ -431,29 +437,69 @@ impl App {
             .to_string()
     }
 
+    fn apply_loaded_codebase(&mut self, path: PathBuf, loaded: Box<LoadedCodebase>) {
+        let forced_profile = loaded.environment.bake_options.forced_profile.as_deref();
+        self.settings.set_forced_profile_for(&path, forced_profile);
+
+        if forced_profile.is_none()
+            && let Some(profiles) = loaded.environment.profiles.as_ref()
+        {
+            let selected = (profiles.active != profiles.default).then_some(profiles.active.as_str());
+            self.settings.set_profile_for(&path, selected);
+        }
+
+        let report = self.session.apply_codebase(*loaded);
+        self.settings.record_codebase(&path);
+        self.ui.set_open_error(None);
+        self.ui.set_load_notice(None);
+        self.ui.set_codebase_report(report);
+
+        if mem::take(&mut self.retry_coop_after_load) && self.session.coop().is_some() {
+            match self.session.retry_coop() {
+                Ok(()) => self.ui.reset_coop_notice(),
+                Err(error) => self.ui.set_open_error(Some(error)),
+            }
+        }
+
+        self.start_pending_map();
+    }
+
+    fn decide_trust(&mut self, decision: TrustDecision) {
+        let Some((path, mut loaded)) = self.pending_trust.take() else {
+            return;
+        };
+
+        self.ui.set_trust_prompt(None);
+        match decision {
+            TrustDecision::Trust => {
+                self.settings.trust_codebase(&path);
+                loaded.environment.bake_options.limits.external = vm::ExternalAccess::Trusted;
+            },
+            TrustDecision::Decline => {
+                self.declined_trust.insert(path.clone());
+            },
+        }
+
+        self.apply_loaded_codebase(path, loaded);
+    }
+
     fn apply_outcome(&mut self, outcome: Outcome) {
         match outcome {
             Outcome::Codebase { path, loaded } => {
-                let forced_profile = loaded.environment.bake_options.forced_profile.as_deref();
-                self.settings.set_forced_profile_for(&path, forced_profile);
-                if forced_profile.is_none()
-                    && let Some(profiles) = loaded.environment.profiles.as_ref()
-                {
-                    let selected = (profiles.active != profiles.default).then_some(profiles.active.as_str());
-                    self.settings.set_profile_for(&path, selected);
+                let is_untrusted_caller = loaded
+                    .environment
+                    .bake_program
+                    .as_ref()
+                    .is_some_and(|program| program.uses_external_libraries)
+                    && loaded.environment.bake_options.limits.external == vm::ExternalAccess::Blocked;
+                if is_untrusted_caller && !self.declined_trust.contains(&path) {
+                    self.ui.set_trust_prompt(Some(path.clone()));
+                    self.pending_trust = Some((path, loaded));
+
+                    return;
                 }
-                let report = self.session.apply_codebase(*loaded);
-                self.settings.record_codebase(&path);
-                self.ui.set_open_error(None);
-                self.ui.set_load_notice(None);
-                self.ui.set_codebase_report(report);
-                if mem::take(&mut self.retry_coop_after_load) && self.session.coop().is_some() {
-                    match self.session.retry_coop() {
-                        Ok(()) => self.ui.reset_coop_notice(),
-                        Err(error) => self.ui.set_open_error(Some(error)),
-                    }
-                }
-                self.start_pending_map();
+
+                self.apply_loaded_codebase(path, loaded);
             },
 
             Outcome::Map(loaded) => {
@@ -732,6 +778,13 @@ fn bake_options(settings: &Settings, environment: Option<&std::path::Path>) -> B
             .and_then(|path| settings.forced_profile_for(path))
             .map(str::to_owned),
         profile_dir: profiles_dir().ok(),
-        ..Default::default()
+        limits: vm::Limits {
+            external: if environment.is_some_and(|path| settings.is_trusted(path)) {
+                vm::ExternalAccess::Trusted
+            } else {
+                vm::ExternalAccess::Blocked
+            },
+            ..Default::default()
+        },
     }
 }

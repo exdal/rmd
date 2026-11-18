@@ -1,6 +1,6 @@
 use std::{
     ffi::{CStr, CString},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use dear_imgui_rs::{ConfigFlags, Key, MouseButton, sys};
@@ -10,7 +10,7 @@ use ui::{
     theme::{DEFAULT_THEME, Themes},
 };
 
-use super::{KEYBIND_PRESET_POPUP, draw_keybind_preset_dialog};
+use super::{KEYBIND_PRESET_POPUP, TRUST_POPUP, draw_keybind_preset_dialog};
 use crate::{
     document::{DocumentId, MapDocument},
     frontend::{UiState, fixtures::button_centers},
@@ -472,5 +472,31 @@ fn first_launch_opens_the_keybinding_preset_dialog() {
     assert_eq!(draw_keybind_preset_dialog(ui, &mut open), None);
     assert!(open);
     assert!(ui.is_popup_open(KEYBIND_PRESET_POPUP));
+    assert!(context.render_legacy().valid());
+}
+
+#[test]
+fn trust_popup_stays_closed_without_a_prompt_and_waits_for_a_choice() {
+    let _context = CONTEXT_LOCK.lock().unwrap();
+    let mut context = dear_imgui_rs::Context::create();
+    context
+        .font_atlas()
+        .try_claim_legacy_renderer()
+        .expect("legacy renderer font atlas should be available")
+        .build();
+    context.io_mut().set_display_size([1280.0, 720.0]);
+    context.io_mut().set_delta_time(1.0 / 60.0);
+    let mut state = UiState::new(false).unwrap();
+
+    let ui = context.frame();
+    assert_eq!(state.draw_trust_popup(ui), None);
+    assert!(!ui.is_popup_open(TRUST_POPUP));
+    assert!(context.render_legacy().valid());
+
+    state.set_trust_prompt(Some(PathBuf::from("station.dme")));
+    let ui = context.frame();
+    assert_eq!(state.draw_trust_popup(ui), None);
+    assert!(ui.is_popup_open(TRUST_POPUP));
+    assert!(state.trust_prompt.is_some());
     assert!(context.render_legacy().valid());
 }

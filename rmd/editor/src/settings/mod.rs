@@ -210,6 +210,7 @@ pub(crate) struct Settings {
     pub object_tree_filter: ObjectTreeFilterOptions,
     pub keybindings: KeyBindings,
     pub recent_codebases: Vec<PathBuf>,
+    pub trusted_codebases: Vec<PathBuf>,
     pub recent: Vec<RecentMap>,
     pub profile_selections: Vec<ProfileSelection>,
     pub forced_profile_selections: Vec<ForcedProfileSelection>,
@@ -286,6 +287,7 @@ impl Default for Settings {
             object_tree_filter: ObjectTreeFilterOptions::default(),
             keybindings: KeyBindings::default(),
             recent_codebases: Vec::new(),
+            trusted_codebases: Vec::new(),
             recent: Vec::new(),
             profile_selections: Vec::new(),
             forced_profile_selections: Vec::new(),
@@ -392,6 +394,21 @@ impl Settings {
         self.recent_codebases.retain(|recent| *recent != codebase);
         self.recent_codebases.insert(0, codebase);
         self.recent_codebases.truncate(MAX_RECENT);
+    }
+
+    pub fn is_trusted(&self, codebase: &Path) -> bool {
+        let codebase = absolute(codebase);
+
+        self.trusted_codebases.contains(&codebase)
+    }
+
+    pub fn trust_codebase(&mut self, codebase: &Path) {
+        let codebase = absolute(codebase);
+        if !self.trusted_codebases.contains(&codebase) {
+            self.trusted_codebases.push(codebase);
+        }
+
+        self.save();
     }
 
     pub fn forget_codebase(&mut self, codebase: &Path) {

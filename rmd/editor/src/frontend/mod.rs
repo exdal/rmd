@@ -64,7 +64,7 @@ mod menu;
 pub(crate) mod welcome;
 
 use self::{
-    dialog::{SAVE_ERROR_COLOR, draw_keybind_preset_dialog},
+    dialog::{SAVE_ERROR_COLOR, TrustDecision, draw_keybind_preset_dialog},
     welcome::{ForgetRequest, WelcomeOutput},
 };
 
@@ -123,6 +123,7 @@ pub struct UiOutput {
     pub copy_to_clipboard: Option<String>,
     pub reload_profile: Option<ProfileReload>,
     pub load_conflicts: Option<DocumentId>,
+    pub(crate) trust: Option<TrustDecision>,
     pub(crate) keybind_preset: Option<KeybindPreset>,
     pub demand: FrameDemand,
 }
@@ -239,6 +240,7 @@ pub struct UiState {
     pub(crate) close_focus: Option<CloseFocus>,
     pub(crate) edit_command: Option<EditCommand>,
     pub(crate) pending_conflict_reload: Option<DocumentId>,
+    pub(crate) trust_prompt: Option<PathBuf>,
     pub(crate) save_requested: bool,
     pub(crate) exit_requested: bool,
     pub(crate) show_welcome: bool,
@@ -319,6 +321,7 @@ impl UiState {
             close_focus: None,
             edit_command: None,
             pending_conflict_reload: None,
+            trust_prompt: None,
             save_requested: false,
             exit_requested: false,
             show_welcome: true,
@@ -365,6 +368,10 @@ impl UiState {
 
     pub fn request_mouse_popup(&mut self) {
         self.dm_ui.request_mouse_popup();
+    }
+
+    pub fn set_trust_prompt(&mut self, path: Option<PathBuf>) {
+        self.trust_prompt = path;
     }
 
     pub fn set_load_notice(&mut self, notice: Option<LoadNotice>) {
@@ -488,6 +495,7 @@ impl UiState {
 
         let open_source = self.draw_panels(ui, session, settings);
         let load_conflicts = self.draw_reload_conflicts_popup(ui, session);
+        let trust = self.draw_trust_popup(ui);
 
         let mut welcome = WelcomeOutput::default();
         self.draw_welcome(ui, session, settings, loading, &mut welcome);
@@ -535,6 +543,7 @@ impl UiState {
             copy_to_clipboard: load_popup.copy.or_else(|| self.copy_to_clipboard.take()),
             reload_profile,
             load_conflicts,
+            trust,
             keybind_preset: None,
             demand: self.demand.get(),
         })

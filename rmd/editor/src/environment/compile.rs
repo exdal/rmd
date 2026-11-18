@@ -156,6 +156,8 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
                 (Some(module), Some((profile, _))) => {
                     let definition = vm::profile::ProfileDefinition::resolve(&view.tree, &module.index, profile);
                     let roots = definition.entry_points();
+                    let uses_external_libraries =
+                        module.calls_intrinsic(&[vm::Intrinsic::CallExt, vm::Intrinsic::LoadExt]);
                     match codegen::generate_reachable(&module, &view.tree, &roots, &vm::bake::host_reads()) {
                         Ok(module) => (
                             Some(BakeProgram {
@@ -163,6 +165,7 @@ pub(crate) fn compile(entry: &Path, options: &BakeOptions, progress: &Progress) 
                                 module,
                                 profile,
                                 icon_states: vm::IconStates::default(),
+                                uses_external_libraries,
                             }),
                             None,
                         ),

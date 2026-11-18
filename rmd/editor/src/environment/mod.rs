@@ -38,6 +38,7 @@ pub struct BakeProgram {
     pub module: codegen::Module,
     pub profile: objtree::TypeId,
     pub icon_states: vm::IconStates,
+    pub uses_external_libraries: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
