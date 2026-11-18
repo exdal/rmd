@@ -12,6 +12,7 @@ use crate::{
     intrinsic::view_grid::{Sight, ViewGrid, ViewTile, dantom_spiral},
     json, lighting,
     matrix::Matrix,
+    text::{self, Unit},
     value::{ListData, ProcRef, Src, number_text},
     world::Position,
 };
@@ -525,12 +526,12 @@ impl Evaluator<'_> {
     /// https://ref.dm-lang.org/proc/length
     ///
     /// Returns: The length of the data associated with E.
-    pub(crate) fn length(&self, value: GenericValue) -> f32 {
+    pub(crate) fn length(&self, value: GenericValue, unit: Unit) -> f32 {
         (match value {
             GenericValue::List(id) | GenericValue::ArgList(id) => {
                 self.runtime.heap.list(id).map_or(0, |l| l.entries.len())
             },
-            GenericValue::Text(s) | GenericValue::Resource(s) => s.chars().count(),
+            GenericValue::Text(s) | GenericValue::Resource(s) => text::len(&s, unit),
             GenericValue::Null => 0,
             GenericValue::Object(id) => self.runtime.heap.object(id).map_or(0, |o| o.contents.len()),
             _ => 0,
@@ -916,16 +917,16 @@ impl Evaluator<'_> {
     /// https://ref.dm-lang.org/proc/copytext
     ///
     /// Returns: A text string.
-    pub(crate) fn copytext(&mut self, args: &[GenericValue]) -> Result<GenericValue> {
+    pub(crate) fn copytext(&mut self, args: &[GenericValue], unit: Unit) -> Result<GenericValue> {
         let text = |n: usize| args.get(n).and_then(|value| value.text()).unwrap_or_default();
 
         let s = text(0);
-        let chars = s.chars().collect::<Vec<_>>();
-        self.charge(chars.len())?;
-        let start = index_arg(args, 1, 1, chars.len() + 1);
-        let end = index_arg(args, 2, 0, chars.len() + 1);
+        let length = text::len(s, unit);
+        self.charge(length)?;
+        let start = index_arg(args, 1, 1, length + 1);
+        let end = index_arg(args, 2, 0, length + 1);
 
-        self.text(chars.get(start.min(end)..end).unwrap_or_default().iter().collect())
+        self.text(text::slice(s, start.min(end), end, unit))
     }
 
     /// https://ref.dm-lang.org/proc/findtext
@@ -951,8 +952,29 @@ impl Evaluator<'_> {
             return Err(self.fault(FaultKind::Blocked("regex matching".into())));
         }
 
-        let case = matches!(intrinsic, Intrinsic::FindtextEx | Intrinsic::FindlasttextEx);
-        let last = matches!(intrinsic, Intrinsic::Findlasttext | Intrinsic::FindlasttextEx);
+        // is this genius or dumb
+        let case = matches!(
+            intrinsic,
+            Intrinsic::FindtextEx
+                | Intrinsic::FindlasttextEx
+                | Intrinsic::FindtextExChar
+                | Intrinsic::FindlasttextExChar
+        );
+        let last = matches!(
+            intrinsic,
+            Intrinsic::Findlasttext
+                | Intrinsic::FindlasttextEx
+                | Intrinsic::FindlasttextChar
+                | Intrinsic::FindlasttextExChar
+        );
+        let unit = match intrinsic {
+            Intrinsic::FindtextChar
+            | Intrinsic::FindtextExChar
+            | Intrinsic::FindlasttextChar
+            | Intrinsic::FindlasttextExChar => Unit::Chars,
+            _ => Unit::Bytes,
+        };
+
         let hay = if case {
             text(0).to_string()
         } else {
@@ -963,11 +985,13 @@ impl Evaluator<'_> {
         } else {
             text(1).to_lowercase()
         };
+
         self.charge(hay.len().saturating_add(needle.len()))?;
-        let chars = hay.chars().collect::<Vec<_>>();
-        let start = index_arg(args, 2, 1, chars.len() + 1);
-        let end = index_arg(args, 3, 0, chars.len() + 1);
-        let segment: String = chars.get(start.min(end)..end).unwrap_or_default().iter().collect();
+
+        let length = text::len(&hay, unit);
+        let start = index_arg(args, 2, 1, length + 1);
+        let end = index_arg(args, 3, 0, length + 1);
+        let segment = text::slice(&hay, start.min(end), end, unit);
         let found = if last {
             segment.rfind(&needle)
         } else {
@@ -975,7 +999,7 @@ impl Evaluator<'_> {
         };
 
         Ok(found
-            .map(|offset| start + segment.get(..offset).unwrap_or_default().chars().count() + 1)
+            .map(|offset| start + text::offset(&segment, offset, unit) + 1)
             .unwrap_or(0)
             .into())
     }
@@ -1369,7 +1393,7 @@ impl Evaluator<'_> {
     /// T: A text string.
     /// pos: The byte position in T to use, starting at 1.
     /// Returns: A number representing the character's ASCII or Unicode code.
-    pub(crate) fn text2ascii(&self, args: &[GenericValue]) -> Result<GenericValue> {
+    pub(crate) fn text2ascii(&self, args: &[GenericValue], unit: Unit) -> Result<GenericValue> {
         let arg = |n: usize| args.get(n).cloned().unwrap_or_default();
         let text = |n: usize| args.get(n).and_then(|value| value.text()).unwrap_or_default();
 
@@ -1377,10 +1401,13 @@ impl Evaluator<'_> {
             0 | 1 => 1.0,
             _ => self.number(&arg(1))?,
         };
-        let chars = text(0).chars().collect::<Vec<_>>();
-        let index = index_arg(&[GenericValue::Num(position)], 0, 1, chars.len() + 1);
+        let length = text::len(text(0), unit);
+        let index = index_arg(&[GenericValue::Num(position)], 0, 1, length + 1);
 
-        Ok(chars.get(index).map(|c| *c as u32 as f32).unwrap_or(0.0).into())
+        Ok(text::char_at(text(0), index, unit)
+            .map(|c| c as u32 as f32)
+            .unwrap_or(0.0)
+            .into())
     }
 
     /// https://ref.dm-lang.org/proc/ascii2text

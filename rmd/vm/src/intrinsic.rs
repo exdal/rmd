@@ -1,6 +1,6 @@
 use base::types::Identifier;
 
-use crate::{ExternalAccess, FaultKind, GenericValue, Intrinsic, eval::Evaluator, value::Src};
+use crate::{ExternalAccess, FaultKind, GenericValue, Intrinsic, eval::Evaluator, text::Unit, value::Src};
 
 mod byond;
 mod demir;
@@ -234,7 +234,8 @@ impl Evaluator<'_> {
             | Intrinsic::Isobj
             | Intrinsic::Ismob
             | Intrinsic::Isloc => Ok(self.is_atom_kind(intrinsic, &arg(0)).into()),
-            Intrinsic::Length | Intrinsic::LengthChar => Ok(self.length(arg(0)).into()),
+            Intrinsic::Length => Ok(self.length(arg(0), Unit::Bytes).into()),
+            Intrinsic::LengthChar => Ok(self.length(arg(0), Unit::Chars).into()),
             Intrinsic::Typesof => self.typesof(positional()),
             Intrinsic::Text2path => Ok(self.text2path(text(0))),
             Intrinsic::Min | Intrinsic::Max => self.min_max(intrinsic, positional()),
@@ -270,10 +271,16 @@ impl Evaluator<'_> {
             Intrinsic::Uppertext => self.uppertext(text(0)),
             Intrinsic::Lowertext => self.lowertext(text(0)),
             Intrinsic::Sorttext | Intrinsic::SorttextEx => self.sorttext(intrinsic, text(0), text(1)),
-            Intrinsic::Copytext | Intrinsic::CopytextChar => self.copytext(&positional()),
-            Intrinsic::Findtext | Intrinsic::FindtextEx | Intrinsic::Findlasttext | Intrinsic::FindlasttextEx => {
-                self.findtext(intrinsic, &positional())
-            },
+            Intrinsic::Copytext => self.copytext(&positional(), Unit::Bytes),
+            Intrinsic::CopytextChar => self.copytext(&positional(), Unit::Chars),
+            Intrinsic::Findtext
+            | Intrinsic::FindtextEx
+            | Intrinsic::Findlasttext
+            | Intrinsic::FindlasttextEx
+            | Intrinsic::FindtextChar
+            | Intrinsic::FindtextExChar
+            | Intrinsic::FindlasttextChar
+            | Intrinsic::FindlasttextExChar => self.findtext(intrinsic, &positional()),
             Intrinsic::Replacetext | Intrinsic::ReplacetextEx => self.replacetext(intrinsic, &positional()),
             Intrinsic::Splittext => self.splittext(text(0), text(1)),
             Intrinsic::Params2list => self.params2list(text(0)),
@@ -292,7 +299,8 @@ impl Evaluator<'_> {
             Intrinsic::Cmptext | Intrinsic::CmptextEx => self.cmptext(intrinsic, &positional()),
             Intrinsic::Addtext => self.addtext(&positional()),
             Intrinsic::Jointext => self.jointext(&positional()),
-            Intrinsic::Text2ascii | Intrinsic::Text2asciiChar => self.text2ascii(&positional()),
+            Intrinsic::Text2ascii => self.text2ascii(&positional(), Unit::Bytes),
+            Intrinsic::Text2asciiChar => self.text2ascii(&positional(), Unit::Chars),
             Intrinsic::Ascii2text => self.ascii2text(&arg(0)),
 
             Intrinsic::Sin => self.sin(&arg(0)),
@@ -329,10 +337,6 @@ impl Evaluator<'_> {
             | Intrinsic::DmDbRowCount
             | Intrinsic::DmDbRowsAffected
             | Intrinsic::Filter
-            | Intrinsic::FindlasttextChar
-            | Intrinsic::FindlasttextExChar
-            | Intrinsic::FindtextChar
-            | Intrinsic::FindtextExChar
             | Intrinsic::Ftime
             | Intrinsic::GetStepAway
             | Intrinsic::GetStepRand

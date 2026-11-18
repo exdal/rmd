@@ -4789,6 +4789,26 @@ fn text_macros_mark_the_text() {
 }
 
 #[test]
+fn text_positions_count_bytes() {
+    let source = fixture!("programs/text_positions_count_bytes.dm");
+    let expected = [
+        ("indexing", r#"["\u00e7","\ufffd","a","y","1"]"#),
+        ("lengths", "5|4"),
+        ("ascii_codes", "231|65533|97|97"),
+        ("copies", r#"["\ufffd","\ufffday1","\u00e7","\u00e7"]"#),
+        ("searches", "3|2|4"),
+        ("searches_from_the_end", "6|4|0|4"),
+        ("replaced", r#""\u00e7by1""#),
+        ("split", r#"["\u00e7","y1"]"#),
+        ("uppercased", r#""\u00c7AY1"|5"#),
+        ("out_of_range", r#"|0|"ay1""#),
+    ];
+    for (name, text) in expected {
+        assert_eq!(run_text_proc(source, name).expect(name), text, "{name}");
+    }
+}
+
+#[test]
 fn atoms_interpolate_as_their_name() {
     let source = fixture!("programs/atoms_interpolate_as_their_name.dm");
     let expected = [

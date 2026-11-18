@@ -21,6 +21,7 @@ use crate::{
     Fault, FaultKind, GenericValue, Limits, StackFrame,
     bake::Placement,
     heap::{Heap, Object, ObjectId, Static},
+    text::{self, Unit},
     value::{IteratorId, ListData, ListId, MAX_EXACT_INTEGER, ModifiedType, ProcRef, RangeValue, Src},
     world::{Position, World},
 };
@@ -2240,9 +2241,7 @@ impl Evaluator<'_> {
                 .ok_or_else(|| self.fault(FaultKind::InvalidReference)),
             GenericValue::Text(text) => {
                 let index = self.number(&key)? as usize;
-                Ok(text
-                    .chars()
-                    .nth(index.wrapping_sub(1))
+                Ok(text::char_at(&text, index.wrapping_sub(1), Unit::Bytes)
                     .map(|character| character.to_string().into())
                     .unwrap_or_default())
             },

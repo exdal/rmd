@@ -15,6 +15,7 @@ pub mod json;
 mod lighting;
 pub mod matrix;
 pub mod profile;
+mod text;
 mod toml_value;
 pub mod ui;
 pub mod value;
