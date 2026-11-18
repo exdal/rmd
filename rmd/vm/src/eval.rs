@@ -1603,6 +1603,7 @@ impl Evaluator<'_> {
             GenericValue::Proc(reference) => {
                 self.call_function_for_proc(reference.proc, reference.src, frame.usr, args)
             },
+            GenericValue::External(function) => self.call_external(&function, &args),
             GenericValue::Path(path) if path.flags.intersects(PathFlags::IS_PROC | PathFlags::IS_VERB) => {
                 let name = path
                     .name()

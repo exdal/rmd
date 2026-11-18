@@ -22,6 +22,7 @@ pub enum FaultKind {
     InvalidOperation(String),
     Trap(String),
     Thrown(String),
+    External(String),
 }
 
 impl std::fmt::Display for FaultKind {
@@ -41,6 +42,7 @@ impl std::fmt::Display for FaultKind {
             Self::Trap(reason) => write!(formatter, "trap: {reason}"),
             Self::Thrown(what) if what.is_empty() => formatter.write_str("uncaught exception"),
             Self::Thrown(what) => write!(formatter, "uncaught exception: {what}"),
+            Self::External(what) => write!(formatter, "external library: {what}"),
         }
     }
 }

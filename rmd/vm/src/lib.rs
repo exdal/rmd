@@ -8,6 +8,7 @@ pub mod bake;
 mod builtins;
 mod error;
 pub mod eval;
+pub mod external;
 pub mod heap;
 mod intrinsic;
 pub mod json;
@@ -21,6 +22,7 @@ pub mod world;
 
 pub use error::{Fault, FaultKey, FaultKind, StackFrame, proc_name};
 pub use eval::Runtime;
+pub use external::ExternalAccess;
 pub use prelude::Intrinsic;
 pub use value::{AppearanceDelta, AppearanceLighting, GenericValue};
 
@@ -31,6 +33,7 @@ pub struct Limits {
     pub allocations: usize,
     pub text_bytes: usize,
     pub constant_depth: usize,
+    pub external: ExternalAccess,
 }
 
 impl Default for Limits {
@@ -41,6 +44,7 @@ impl Default for Limits {
             allocations: 100_000,
             text_bytes: 1_048_576,
             constant_depth: 128,
+            external: ExternalAccess::Blocked,
         }
     }
 }

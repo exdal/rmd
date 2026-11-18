@@ -4,7 +4,7 @@ use base::{
 };
 use std::{collections::HashMap, sync::Arc};
 
-use crate::heap::ObjectId;
+use crate::{external::ExternalFunction, heap::ObjectId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ListId(pub u32);
@@ -78,6 +78,7 @@ pub enum GenericValue {
     Resource(Arc<str>),
     Path(Box<TreePath>),
     Proc(ProcRef),
+    External(Arc<ExternalFunction>),
     List(ListId),
     Iterator(IteratorId),
     Range(RangeValue),
@@ -134,6 +135,7 @@ impl GenericValue {
             Self::ModifiedType(value) => value.path.to_string(),
             Self::Object(id) => format!("[object {}]", id.0),
             Self::Proc(p) => format!("[proc {}]", p.proc.0),
+            Self::External(function) => format!("[external {}]", function.name),
             Self::World => "world".into(),
             Self::Global => "global".into(),
         }
@@ -187,6 +189,7 @@ impl PartialEq for GenericValue {
             (Self::ModifiedType(a), Self::ModifiedType(b)) => a == b,
             (Self::Object(a), Self::Object(b)) => a == b,
             (Self::Proc(a), Self::Proc(b)) => a == b,
+            (Self::External(a), Self::External(b)) => a == b,
             _ => false,
         }
     }
@@ -225,6 +228,10 @@ impl GenericValue {
             Self::Proc(p) => {
                 p.src.hash(&mut hash);
                 p.proc.hash(&mut hash);
+            },
+            Self::External(function) => {
+                function.library.hash(&mut hash);
+                function.name.hash(&mut hash);
             },
             _ => {},
         }

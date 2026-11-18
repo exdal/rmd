@@ -259,3 +259,10 @@
 // Profile state does not affect the map until ui() requests the required derived data.
 /proc/demir_rebake(kinds, groups = 0)
 	set __demir_intrin = "DemirRebake"
+
+// External libraries
+
+// Whether the user trusted this codebase to run native libraries, as 1 or 0. call_ext() and
+// load_ext() are a runtime error otherwise, so check this before calling them.
+/proc/demir_trusted()
+	set __demir_intrin = "DemirTrusted"

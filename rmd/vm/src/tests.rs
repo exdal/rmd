@@ -13,7 +13,7 @@ use defines::{EAST, NORTH, NORTHEAST, SOUTH, SOUTHWEST, WEST};
 use objtree::{ObjectTree, ResolvedVarType, TypeId, VarTypeKind};
 
 use crate::{
-    Fault, FaultKind, GenericValue, IconStates, Limits, Runtime,
+    ExternalAccess, Fault, FaultKind, GenericValue, IconStates, Limits, Runtime,
     bake::{
         Atom, Bake, BakeUpdate, HIGHLIGHT_ALWAYS, HIGHLIGHT_EDGE_NORTH, HIGHLIGHT_EDGE_SOUTH, HIGHLIGHT_EDGE_WEST,
         HIGHLIGHT_SELECTED, HighlightTile, ModuleRoot, NodePortRule, PendingBake, ProfileError, Stage, has_profile,
@@ -4744,4 +4744,109 @@ fn modules_are_inserted_before_atom_hooks() {
         );
     }
     assert_eq!(progress.last(), Some(&(Stage::Smooth, 6, 6)));
+}
+
+fn run_external(
+    tree: &ObjectTree, module: &codegen::Module, root: Option<&std::path::Path>, access: ExternalAccess, name: &str,
+) -> Result<GenericValue, Fault> {
+    let mut runtime = Runtime::default();
+    runtime.world.root = root.map(std::path::Path::to_path_buf);
+    runtime.run(
+        tree,
+        module,
+        proc(tree, &module.index, name),
+        None,
+        None,
+        Vec::new(),
+        Limits {
+            external: access,
+            ..Limits::default()
+        },
+    )
+}
+
+#[test]
+fn external_calls_are_blocked_until_trusted() {
+    let (tree, module) = compile(fixture!("programs/external_libraries.dm"));
+
+    for (name, blocked) in [("call_merge", "call_ext"), ("load_merge", "load_ext")] {
+        let fault = run_external(&tree, &module, None, ExternalAccess::Blocked, name).expect_err("should be blocked");
+        assert_eq!(fault.kind, FaultKind::Blocked(blocked.into()), "{name}");
+    }
+}
+
+#[test]
+fn external_calls_reach_a_trusted_library() {
+    let (tree, module) = compile(fixture!("programs/external_libraries.dm"));
+    let root = std::env::temp_dir().join(format!("rmd-external-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("temp dir");
+    let library = root.join(format!("merge.{}", std::env::consts::DLL_EXTENSION));
+    let status = std::process::Command::new("rustc")
+        .args(["--edition", "2021", "--crate-type", "cdylib", "-o"])
+        .arg(&library)
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/external/merge.rs"))
+        .status()
+        .expect("rustc should run");
+    assert!(status.success(), "the fixture library should build");
+
+    let run = |name: &str| run_external(&tree, &module, Some(&root), ExternalAccess::Trusted, name);
+    assert_eq!(run("call_merge").expect("merge"), GenericValue::from("feefo"));
+    assert_eq!(run("call_stdcall_merge").expect("@merge"), GenericValue::from("fi"));
+    assert_eq!(run("count_calls").expect("count"), GenericValue::from("1,2,3"));
+    assert_eq!(run("call_nothing").expect("nothing"), GenericValue::from(true));
+
+    let fault = run("call_byondapi").expect_err("byondapi is unsupported");
+    assert!(
+        matches!(fault.kind, FaultKind::Unsupported(ref what) if what.contains("byondapi")),
+        "{fault:?}"
+    );
+
+    let fault = run("call_missing").expect_err("missing library");
+    assert!(
+        matches!(fault.kind, FaultKind::External(ref what) if what.starts_with("missing not found")),
+        "{fault:?}"
+    );
+
+    let fault = run("call_missing_function").expect_err("missing function");
+    assert!(
+        matches!(fault.kind, FaultKind::External(ref what) if what.contains("absent")),
+        "{fault:?}"
+    );
+
+    let before = std::env::current_dir().expect("working directory");
+    let GenericValue::Text(during) = run("call_cwd").expect("cwd") else {
+        panic!("cwd should return text");
+    };
+    assert_eq!(
+        std::path::Path::new(during.as_ref())
+            .canonicalize()
+            .expect("cwd exists"),
+        root.canonicalize().expect("root exists")
+    );
+    assert_eq!(std::env::current_dir().expect("working directory"), before);
+
+    run("call_touch").expect("touch");
+    assert!(root.join("made/out.txt").is_file());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn external_library_calls_are_detected_in_ir() {
+    let externals = [crate::Intrinsic::CallExt, crate::Intrinsic::LoadExt];
+    let (_, module) = analyze_fixture(fixture!("programs/external_libraries.dm"));
+    assert!(module.calls_intrinsic(&externals));
+
+    let (_, module) = analyze_fixture(fixture!("programs/immediate_spawns.dm"));
+    assert!(!module.calls_intrinsic(&externals));
+}
+
+#[test]
+fn trust_is_visible_to_dm() {
+    let (tree, module) = compile(fixture!("programs/external_libraries.dm"));
+
+    for (access, expected) in [(ExternalAccess::Blocked, 0.0), (ExternalAccess::Trusted, 1.0)] {
+        let value = run_external(&tree, &module, None, access, "trusted").expect("trusted");
+        assert_eq!(value, GenericValue::Num(expected), "{access:?}");
+    }
 }

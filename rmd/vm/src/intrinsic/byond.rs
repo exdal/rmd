@@ -1,10 +1,11 @@
 use base::{file_path, path::TreePath, types::Identifier, vars};
-use std::{collections::HashSet, path::PathBuf};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use crate::{
     FaultKind, GenericValue, Intrinsic,
     builtins::index_arg,
     eval::Evaluator,
+    external::{ExternalAccess, ExternalFunction},
     heap::{Object, ObjectId},
     intrinsic::view_grid::{Sight, ViewGrid, ViewTile, dantom_spiral},
     json, lighting,
@@ -24,14 +25,6 @@ impl Evaluator<'_> {
     /// LibName: name of external library ("test.DLL")
     /// FuncName: name of function in external library ("func")
     /// Returns: The return value of the proc being called.
-    ///
-    /// https://ref.dm-lang.org/proc/call_ext
-    ///
-    /// LibName: name of external library ("test.DLL") (note
-    /// FuncName: name of function in external library ("func"), which may have prefixes to describe the type of
-    /// function
-    /// LoadedFunc: reference to a function that was loaded via load_ext()
-    /// Returns: The return value of the external library function.
     pub(crate) fn dm_call(&mut self, args: &[GenericValue]) -> Result<GenericValue> {
         let arg = |n: usize| args.get(n).cloned().unwrap_or_default();
 
@@ -71,6 +64,70 @@ impl Evaluator<'_> {
             .and_then(|(ty, proc_name)| self.find_proc(ty, &proc_name))
             .ok_or_else(|| self.fault(FaultKind::MissingProc("dynamic DM proc".into())))?;
         Ok(GenericValue::Proc(ProcRef { src, proc }))
+    }
+
+    /// https://ref.dm-lang.org/proc/call_ext
+    ///
+    /// LibName: name of external library ("test.DLL")
+    /// FuncName: name of function in external library ("func"), which may have prefixes to describe the type of
+    /// function
+    /// LoadedFunc: reference to a function that was loaded via load_ext()
+    /// Returns: The return value of the external library function.
+    ///
+    /// https://ref.dm-lang.org/proc/load_ext
+    pub(crate) fn call_ext(&mut self, name: &str, args: &[GenericValue]) -> Result<GenericValue> {
+        self.is_cacheable = false;
+        if self.limits.external == ExternalAccess::Blocked {
+            return Err(self.fault(FaultKind::Blocked(name.into())));
+        }
+
+        match args {
+            [GenericValue::External(function)] => Ok(GenericValue::External(function.clone())),
+            [library, function, ..] => {
+                let (Some(library), Some(function)) = (library.text(), function.text()) else {
+                    return Err(self.fault(FaultKind::InvalidOperation(format!(
+                        "{name} needs a library and a function name"
+                    ))));
+                };
+                let Some(root) = self.runtime.world.root.clone() else {
+                    return Err(self.fault(FaultKind::Blocked("filesystem".into())));
+                };
+
+                ExternalFunction::load(&root, library, function)
+                    .map(|function| GenericValue::External(Arc::new(function)))
+                    .map_err(|kind| self.fault(kind))
+            },
+            _ => Err(self.fault(FaultKind::InvalidOperation(format!(
+                "{name} needs a library and a function name"
+            )))),
+        }
+    }
+
+    pub(crate) fn call_external(
+        &mut self, function: &ExternalFunction, args: &[(Option<Identifier>, GenericValue)],
+    ) -> Result<GenericValue> {
+        self.is_cacheable = false;
+        let Some(root) = self.runtime.world.root.clone() else {
+            return Err(self.fault(FaultKind::Blocked("filesystem".into())));
+        };
+
+        let args = args
+            .iter()
+            .map(|(_, value)| match value {
+                GenericValue::Text(text) => text.as_ref(),
+                _ => "",
+            })
+            .collect::<Vec<_>>();
+
+        let Some(result) = function.call(&root, &args).map_err(|kind| self.fault(kind))? else {
+            return Ok(GenericValue::Null);
+        };
+
+        if result.len() > self.limits.text_bytes {
+            return Err(self.fault(FaultKind::Memory));
+        }
+
+        Ok(result.into())
     }
 
     /// https://ref.dm-lang.org/proc/arglist

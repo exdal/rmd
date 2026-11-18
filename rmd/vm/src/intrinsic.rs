@@ -1,6 +1,6 @@
 use base::types::Identifier;
 
-use crate::{FaultKind, GenericValue, Intrinsic, eval::Evaluator, value::Src};
+use crate::{ExternalAccess, FaultKind, GenericValue, Intrinsic, eval::Evaluator, value::Src};
 
 mod byond;
 mod demir;
@@ -18,7 +18,8 @@ impl Evaluator<'_> {
         let positional = || args.iter().map(|(_, value)| value.clone()).collect::<Vec<_>>();
 
         match intrinsic {
-            Intrinsic::Call | Intrinsic::CallExt => self.dm_call(&positional()),
+            Intrinsic::Call => self.dm_call(&positional()),
+            Intrinsic::CallExt | Intrinsic::LoadExt => self.call_ext(name, &positional()),
             Intrinsic::Arglist => self.arglist(arg(0)),
 
             Intrinsic::WorldNew | Intrinsic::WorldDel | Intrinsic::WorldTopic | Intrinsic::WorldError => {
@@ -130,6 +131,7 @@ impl Evaluator<'_> {
             | Intrinsic::MakeGenerator => Err(self.fault(FaultKind::Blocked(name.into()))),
 
             Intrinsic::DemirProfile => self.profile(),
+            Intrinsic::DemirTrusted => Ok((self.limits.external == ExternalAccess::Trusted).into()),
 
             // surely this function cannot get any larger
             Intrinsic::DemirNodeGroup => self.node_group(name, arg(0), arg(1), arg(2), arg(3), arg(4)),
@@ -345,7 +347,6 @@ impl Evaluator<'_> {
             | Intrinsic::JsonEncode
             | Intrinsic::Lentext
             | Intrinsic::List2params
-            | Intrinsic::LoadExt
             | Intrinsic::LoadResource
             | Intrinsic::Md5
             | Intrinsic::Missile

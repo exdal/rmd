@@ -611,6 +611,22 @@ impl Module {
         self.procs.get(id.0 as usize)
     }
 
+    pub fn calls_intrinsic(&self, intrinsics: &[Intrinsic]) -> bool {
+        self.nodes.iter().any(|node| {
+            let IrNode::FunctionCall { function, .. } = node else {
+                return false;
+            };
+
+            let Some(IrNode::Function(proc)) = self.node(*function) else {
+                return false;
+            };
+
+            self.proc(*proc)
+                .and_then(|procedure| procedure.intrinsic)
+                .is_some_and(|intrinsic| intrinsics.contains(&intrinsic))
+        })
+    }
+
     pub fn block(&self, id: IrNodeId) -> Option<&[IrNodeId]> {
         match self.node(id)? {
             IrNode::Label(instructions) => Some(instructions),
