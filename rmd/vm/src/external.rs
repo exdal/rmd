@@ -110,16 +110,24 @@ impl PartialEq for ExternalFunction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Platform {
     Windows,
-    Unix,
+    Linux,
+    MacOs,
 }
 
 impl Platform {
-    const HOST: Self = if cfg!(windows) { Self::Windows } else { Self::Unix };
+    const HOST: Self = if cfg!(windows) {
+        Self::Windows
+    } else if cfg!(target_os = "macos") {
+        Self::MacOs
+    } else {
+        Self::Linux
+    };
 
     fn extension(self) -> &'static str {
         match self {
             Self::Windows => "dll",
-            Self::Unix => "so",
+            Self::Linux => "so",
+            Self::MacOs => "dylib",
         }
     }
 }
@@ -127,7 +135,7 @@ impl Platform {
 fn locate(root: &Path, library: &str) -> Result<PathBuf, FaultKind> {
     let names = candidates(library, Platform::HOST);
     let byond_bin = std::env::var_os("HOME")
-        .filter(|_| Platform::HOST == Platform::Unix)
+        .filter(|_| Platform::HOST == Platform::Linux)
         .map(|home| PathBuf::from(home).join(".byond/bin"));
     let tried = [Some(root), byond_bin.as_deref()]
         .into_iter()
@@ -159,7 +167,7 @@ fn candidates(library: &str, platform: Platform) -> Vec<String> {
     };
 
     let prefixes = match platform {
-        Platform::Unix if !stem.starts_with("lib") => &["", "lib"][..],
+        Platform::Linux | Platform::MacOs if !stem.starts_with("lib") => &["", "lib"][..],
         _ => &[""][..],
     };
 
@@ -212,7 +220,8 @@ fn open(path: &Path) -> Result<&'static Library, FaultKind> {
 fn host_name() -> &'static str {
     match Platform::HOST {
         Platform::Windows => "Windows",
-        Platform::Unix => "Linux",
+        Platform::Linux => "Linux",
+        Platform::MacOs => "macOS",
     }
 }
 
@@ -227,13 +236,13 @@ fn foreign_binary(path: &Path) -> Option<&'static str> {
             let machine = u16::from_le_bytes(header.get(offset + 4..offset + 6)?.try_into().ok()?);
             match (machine, Platform::HOST) {
                 (0x14c, _) => Some("a 32-bit Windows library"),
-                (_, Platform::Unix) => Some("a Windows library"),
+                (_, Platform::Linux | Platform::MacOs) => Some("a Windows library"),
                 _ => None,
             }
         },
         [0x7f, b'E', b'L', b'F', class] => match (class, Platform::HOST) {
             (1, _) => Some("a 32-bit Linux library"),
-            (_, Platform::Windows) => Some("a Linux library"),
+            (_, Platform::Windows | Platform::MacOs) => Some("a Linux library"),
             _ => None,
         },
         _ => None,
@@ -255,7 +264,7 @@ mod tests {
             ("test.DLL", Platform::Windows, &["test64.DLL", "test.DLL"][..]),
             (
                 "rust_g",
-                Platform::Unix,
+                Platform::Linux,
                 &[
                     "rust_g64.so",
                     "rust_g64",
@@ -268,8 +277,22 @@ mod tests {
                 ][..],
             ),
             (
+                "merge",
+                Platform::MacOs,
+                &[
+                    "merge64.dylib",
+                    "merge64",
+                    "libmerge64.dylib",
+                    "libmerge64",
+                    "merge.dylib",
+                    "merge",
+                    "libmerge.dylib",
+                    "libmerge",
+                ][..],
+            ),
+            (
                 "./librust_g.so",
-                Platform::Unix,
+                Platform::Linux,
                 &["./librust_g64.so", "./librust_g.so"][..],
             ),
             (
