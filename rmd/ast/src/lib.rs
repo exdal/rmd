@@ -1,5 +1,6 @@
 use base::{
     location::{LineTable, Location, SourceLine},
+    number,
     path::TreePath,
     types::{Identifier, VarModifiers},
 };
@@ -451,8 +452,142 @@ pub enum BinaryOp {
     In,
 }
 
+pub fn fold_number(op: BinaryOp, lhs: f32, rhs: f32) -> Option<f32> {
+    use BinaryOp::*;
+
+    if matches!(op, Div | Mod | FloatMod) && rhs == 0.0 {
+        return None;
+    }
+
+    let boolean = |value: bool| if value { 1.0 } else { 0.0 };
+    let float = |result: f32| number::f32(result, &[lhs, rhs]);
+
+    Some(match op {
+        Add => float(lhs + rhs),
+        Sub => float(lhs - rhs),
+        Mul => float(lhs * rhs),
+        Div => float(lhs / rhs),
+        Mod => {
+            if rhs.trunc() == 0.0 {
+                return None;
+            }
+
+            float(lhs.trunc() % rhs.trunc())
+        },
+        FloatMod => float(lhs % rhs),
+        Pow => float(lhs.powf(rhs)),
+        BitAnd => ((lhs as u32) & (rhs as u32)) as f32,
+        BitOr => ((lhs as u32) | (rhs as u32)) as f32,
+        BitXor => ((lhs as u32) ^ (rhs as u32)) as f32,
+        ShiftLeft => ((lhs as u32).checked_shl(rhs as u32).unwrap_or(0) & 0x00ff_ffff) as f32,
+        ShiftRight => (lhs as u32).checked_shr(rhs as u32).unwrap_or(0) as f32,
+        CompLess => boolean(lhs < rhs),
+        CompLessEq => boolean(lhs <= rhs),
+        CompGreater => boolean(lhs > rhs),
+        CompGreaterEq => boolean(lhs >= rhs),
+        CompThreeWay => {
+            if lhs < rhs {
+                -1.0
+            } else if lhs > rhs {
+                1.0
+            } else {
+                0.0
+            }
+        },
+        CompEq | CompNotEq | CompEquiv | CompNotEquiv | LogicalAnd | LogicalOr | In => return None,
+    })
+}
+
+pub fn fold_unary_number(op: UnaryOp, value: f32) -> Option<f32> {
+    match op {
+        UnaryOp::Neg => Some(-value),
+        UnaryOp::BitNot => Some(((!(value as u32)) & 0x00ff_ffff) as f32),
+        _ => None,
+    }
+}
+
 pub fn parse(tokens: &[(lexer::token::Token<'_>, Location)]) -> ParseResult<AST> {
     let mut parser = Parser::new(tokens);
 
     parser.parse()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BinaryOp, UnaryOp, fold_number, fold_unary_number};
+
+    #[test]
+    fn folds_arithmetic() {
+        assert_eq!(fold_number(BinaryOp::Add, 1.0, 2.0), Some(3.0));
+        assert_eq!(fold_number(BinaryOp::Sub, 1.0, 2.0), Some(-1.0));
+        assert_eq!(fold_number(BinaryOp::Mul, 3.0, 2.0), Some(6.0));
+        assert_eq!(fold_number(BinaryOp::Div, 1.0, 4.0), Some(0.25));
+        assert_eq!(fold_number(BinaryOp::Pow, 2.0, 3.0), Some(8.0));
+    }
+
+    #[test]
+    fn mod_truncates_and_float_mod_does_not() {
+        assert_eq!(fold_number(BinaryOp::Mod, 7.9, 3.9), Some(1.0));
+        assert_eq!(fold_number(BinaryOp::FloatMod, 7.5, 2.0), Some(1.5));
+    }
+
+    #[test]
+    fn declines_division_by_zero() {
+        assert_eq!(fold_number(BinaryOp::Div, 1.0, 0.0), None);
+        assert_eq!(fold_number(BinaryOp::FloatMod, 1.0, 0.0), None);
+        assert_eq!(fold_number(BinaryOp::Mod, 1.0, 0.0), None);
+        assert_eq!(fold_number(BinaryOp::Mod, 1.0, 0.5), None);
+    }
+
+    #[test]
+    fn bitwise_ops_cast_through_u32() {
+        assert_eq!(fold_number(BinaryOp::BitAnd, 12.0, 10.0), Some(8.0));
+        assert_eq!(fold_number(BinaryOp::BitOr, 12.0, 10.0), Some(14.0));
+        assert_eq!(fold_number(BinaryOp::BitXor, 12.0, 10.0), Some(6.0));
+    }
+
+    #[test]
+    fn shifts_mask_left_and_zero_out_of_range() {
+        assert_eq!(fold_number(BinaryOp::ShiftLeft, 1.0, 4.0), Some(16.0));
+        assert_eq!(fold_number(BinaryOp::ShiftLeft, 1.0, 24.0), Some(0.0));
+        assert_eq!(fold_number(BinaryOp::ShiftLeft, 1.0, 32.0), Some(0.0));
+        assert_eq!(fold_number(BinaryOp::ShiftRight, 256.0, 4.0), Some(16.0));
+        assert_eq!(fold_number(BinaryOp::ShiftRight, 256.0, 32.0), Some(0.0));
+    }
+
+    #[test]
+    fn comparisons_yield_booleans() {
+        assert_eq!(fold_number(BinaryOp::CompLess, 1.0, 2.0), Some(1.0));
+        assert_eq!(fold_number(BinaryOp::CompLessEq, 2.0, 1.0), Some(0.0));
+        assert_eq!(fold_number(BinaryOp::CompGreater, 2.0, 1.0), Some(1.0));
+        assert_eq!(fold_number(BinaryOp::CompGreaterEq, 1.0, 2.0), Some(0.0));
+        assert_eq!(fold_number(BinaryOp::CompThreeWay, 1.0, 2.0), Some(-1.0));
+        assert_eq!(fold_number(BinaryOp::CompThreeWay, 2.0, 1.0), Some(1.0));
+        assert_eq!(fold_number(BinaryOp::CompThreeWay, 2.0, 2.0), Some(0.0));
+    }
+
+    #[test]
+    fn declines_non_numeric_ops() {
+        assert_eq!(fold_number(BinaryOp::CompEq, 1.0, 1.0), None);
+        assert_eq!(fold_number(BinaryOp::LogicalAnd, 1.0, 1.0), None);
+        assert_eq!(fold_number(BinaryOp::In, 1.0, 1.0), None);
+    }
+
+    #[test]
+    fn fresh_nan_has_the_sign_bit_set() {
+        let result = fold_number(BinaryOp::Sub, f32::INFINITY, f32::INFINITY).unwrap();
+        assert!(result.is_nan());
+        assert!(result.is_sign_negative());
+
+        let propagated = fold_number(BinaryOp::Sub, f32::from_bits(0x7FC0_0000), 1.0).unwrap();
+        assert_eq!(propagated.to_bits(), 0x7FC0_0000);
+    }
+
+    #[test]
+    fn folds_unary() {
+        assert_eq!(fold_unary_number(UnaryOp::Neg, 2.0), Some(-2.0));
+        assert_eq!(fold_unary_number(UnaryOp::BitNot, 0.0), Some(16_777_215.0));
+        assert_eq!(fold_unary_number(UnaryOp::BitNot, 1.0), Some(16_777_214.0));
+        assert_eq!(fold_unary_number(UnaryOp::Not, 1.0), None);
+    }
 }

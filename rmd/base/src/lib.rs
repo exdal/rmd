@@ -4,6 +4,7 @@ pub mod coord;
 pub mod file_path;
 pub mod interner;
 pub mod location;
+pub mod number;
 pub mod path;
 pub mod source;
 pub mod types;

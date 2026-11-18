@@ -1,4 +1,4 @@
-use base::{file_path, path::TreePath, types::Identifier, vars};
+use base::{file_path, number, path::TreePath, types::Identifier, vars};
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use defines::JSON_PRETTY_PRINT;
@@ -610,7 +610,8 @@ impl Evaluator<'_> {
     ///
     /// Returns: The square root of A
     pub(crate) fn sqrt(&self, value: &GenericValue) -> Result<GenericValue> {
-        Ok(self.number(value)?.sqrt().into())
+        let value = self.number(value)?;
+        Ok(number::f32(value.sqrt(), &[value]).into())
     }
 
     /// https://ref.dm-lang.org/proc/round
@@ -1398,35 +1399,40 @@ impl Evaluator<'_> {
     ///
     /// Returns: The sine of X, where X is in degrees.
     pub(crate) fn sin(&self, value: &GenericValue) -> Result<GenericValue> {
-        Ok(self.number(value)?.to_radians().sin().into())
+        let value = self.number(value)?;
+        Ok(number::f32(value.to_radians().sin(), &[value]).into())
     }
 
     /// https://ref.dm-lang.org/proc/cos
     ///
     /// Returns: The cosine of X, where X is in degrees.
     pub(crate) fn cos(&self, value: &GenericValue) -> Result<GenericValue> {
-        Ok(self.number(value)?.to_radians().cos().into())
+        let value = self.number(value)?;
+        Ok(number::f32(value.to_radians().cos(), &[value]).into())
     }
 
     /// https://ref.dm-lang.org/proc/tan
     ///
     /// Returns: The tangent of X, where X is in degrees.
     pub(crate) fn tan(&self, value: &GenericValue) -> Result<GenericValue> {
-        Ok(self.number(value)?.to_radians().tan().into())
+        let value = self.number(value)?;
+        Ok(number::f32(value.to_radians().tan(), &[value]).into())
     }
 
     /// https://ref.dm-lang.org/proc/arcsin
     ///
     /// Returns: The inverse sine of X in degrees.
     pub(crate) fn arcsin(&self, value: &GenericValue) -> Result<GenericValue> {
-        Ok(self.number(value)?.asin().to_degrees().into())
+        let value = self.number(value)?;
+        Ok(number::f32(value.asin().to_degrees(), &[value]).into())
     }
 
     /// https://ref.dm-lang.org/proc/arccos
     ///
     /// Returns: The inverse cosine of X in degrees.
     pub(crate) fn arccos(&self, value: &GenericValue) -> Result<GenericValue> {
-        Ok(self.number(value)?.acos().to_degrees().into())
+        let value = self.number(value)?;
+        Ok(number::f32(value.acos().to_degrees(), &[value]).into())
     }
 
     /// https://ref.dm-lang.org/proc/arctan
@@ -1455,11 +1461,15 @@ impl Evaluator<'_> {
 
         let first = self.number(&arg(0))?;
 
-        Ok(match args.len() {
-            0 | 1 => first.ln(),
-            _ => self.number(&arg(1))?.log(first),
-        }
-        .into())
+        let (result, operands) = match args.len() {
+            0 | 1 => (first.ln(), [first, first]),
+            _ => {
+                let second = self.number(&arg(1))?;
+                (second.log(first), [first, second])
+            },
+        };
+
+        Ok(number::f32(result, &operands).into())
     }
 
     /// https://ref.dm-lang.org/proc/sign

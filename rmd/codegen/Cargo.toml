@@ -4,6 +4,7 @@ version = "1.2.2"
 edition.workspace = true
 
 [dependencies]
+ast.workspace = true
 fixedbitset.workspace = true
 rustc-hash.workspace = true
 base.workspace = true
@@ -12,7 +13,6 @@ objtree.workspace = true
 prelude.workspace = true
 
 [dev-dependencies]
-ast.workspace = true
 lexer.workspace = true
 sema.workspace = true
 

@@ -1,6 +1,7 @@
 // https://dl.acm.org/doi/10.1145/103135.103136
 // https://www.cs.cornell.edu/courses/cs6120/2019fa/blog/sccp
 
+use ast::{fold_number, fold_unary_number};
 use base::{
     path::{PathFlags, TreePath},
     types::{IrNodeId, Value},
@@ -706,9 +707,8 @@ fn boolean(value: bool) -> Value {
 
 fn fold_unary(op: UnaryOp, operand: &Value) -> Option<Value> {
     match op {
-        UnaryOp::Neg => Some(Value::Num(-number(operand)?)),
+        UnaryOp::Neg | UnaryOp::BitNot => fold_unary_number(op, number(operand)?).map(Value::Num),
         UnaryOp::Not => Some(boolean(!operand.is_truthy())),
-        UnaryOp::BitNot => Some(Value::Num(((!(number(operand)? as u32)) & 0x00ff_ffff) as f32)),
         UnaryOp::PreIncrement
         | UnaryOp::PreDecrement
         | UnaryOp::PostIncrement
@@ -746,43 +746,7 @@ fn fold_binary(op: BinaryOp, lhs: &Value, rhs: &Value) -> Option<Value> {
         }));
     }
 
-    let lhs = number(lhs)?;
-    let rhs = number(rhs)?;
-    if matches!(op, Div | Mod | FloatMod) && rhs == 0.0 {
-        return None;
-    }
-
-    Some(match op {
-        Add => Value::Num(lhs + rhs),
-        Sub => Value::Num(lhs - rhs),
-        Mul => Value::Num(lhs * rhs),
-        Div => Value::Num(lhs / rhs),
-        Mod => {
-            if rhs.trunc() == 0.0 {
-                return None;
-            }
-            Value::Num(lhs.trunc() % rhs.trunc())
-        },
-        FloatMod => Value::Num(lhs % rhs),
-        Pow => Value::Num(lhs.powf(rhs)),
-        BitAnd => Value::Num(((lhs as u32) & (rhs as u32)) as f32),
-        BitOr => Value::Num(((lhs as u32) | (rhs as u32)) as f32),
-        BitXor => Value::Num(((lhs as u32) ^ (rhs as u32)) as f32),
-        ShiftLeft => Value::Num(((lhs as u32).checked_shl(rhs as u32).unwrap_or(0) & 0x00ff_ffff) as f32),
-        ShiftRight => Value::Num((lhs as u32).checked_shr(rhs as u32).unwrap_or(0) as f32),
-        CompLess => boolean(lhs < rhs),
-        CompLessEq => boolean(lhs <= rhs),
-        CompGreater => boolean(lhs > rhs),
-        CompGreaterEq => boolean(lhs >= rhs),
-        CompThreeWay => Value::Num(if lhs < rhs {
-            -1.0
-        } else if lhs > rhs {
-            1.0
-        } else {
-            0.0
-        }),
-        CompEq | CompNotEq | CompEquiv | CompNotEquiv | LogicalAnd | LogicalOr | In => unreachable!(),
-    })
+    fold_number(op, number(lhs)?, number(rhs)?).map(Value::Num)
 }
 
 fn equal(lhs: &Value, rhs: &Value) -> bool {

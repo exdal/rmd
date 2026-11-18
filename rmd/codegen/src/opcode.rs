@@ -136,6 +136,38 @@ byte_enum! {
     }
 }
 
+macro_rules! operator_pairs {
+    ($ast:ident, $opcode:ident, $($variant:ident,)*) => {
+        impl From<ast::$ast> for $opcode {
+            fn from(op: ast::$ast) -> Self {
+                match op {
+                    $(ast::$ast::$variant => Self::$variant,)*
+                }
+            }
+        }
+
+        impl From<$opcode> for ast::$ast {
+            fn from(op: $opcode) -> Self {
+                match op {
+                    $($opcode::$variant => Self::$variant,)*
+                }
+            }
+        }
+    };
+}
+
+operator_pairs! {
+    UnaryOp, Unary,
+    Neg, Not, BitNot, PreIncrement, PreDecrement, PostIncrement, PostDecrement, Reference, Dereference,
+}
+
+operator_pairs! {
+    BinaryOp, Binary,
+    Add, Sub, Mul, Div, Mod, FloatMod, Pow, BitAnd, BitXor, BitOr, CompGreater, CompLess, CompEq, CompNotEq,
+    CompGreaterEq, CompLessEq, CompEquiv, CompNotEquiv, CompThreeWay, LogicalAnd, LogicalOr, ShiftLeft,
+    ShiftRight, In,
+}
+
 byte_enum! {
     pub enum Builtin {
         Src = 0x00,

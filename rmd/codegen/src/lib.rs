@@ -611,14 +611,14 @@ impl Generator {
                 let operand = state.register(*operand)?;
                 self.emit_op(Op::Unary);
                 self.emit_register(state.register(id)?);
-                self.emit_u8(unary_code(*op) as u8);
+                self.emit_u8(Unary::from(*op) as u8);
                 self.emit_register(operand);
             },
             IrNode::Binary { op, lhs, .. } if let Some(Immediate::Number(value)) = immediate(module, node) => {
                 let lhs = state.register(*lhs)?;
                 self.emit_op(Op::BinaryI);
                 self.emit_register(state.register(id)?);
-                self.emit_u8(binary_code(*op) as u8);
+                self.emit_u8(Binary::from(*op) as u8);
                 self.emit_register(lhs);
                 self.emit_f32(value);
             },
@@ -627,7 +627,7 @@ impl Generator {
                 let rhs = state.register(*rhs)?;
                 self.emit_op(Op::Binary);
                 self.emit_register(state.register(id)?);
-                self.emit_u8(binary_code(*op) as u8);
+                self.emit_u8(Binary::from(*op) as u8);
                 self.emit_register(lhs);
                 self.emit_register(rhs);
             },
@@ -635,7 +635,7 @@ impl Generator {
                 let lhs = state.register(*lhs)?;
                 self.emit_op(Op::CompoundBinaryI);
                 self.emit_register(state.register(id)?);
-                self.emit_u8(binary_code(*op) as u8);
+                self.emit_u8(Binary::from(*op) as u8);
                 self.emit_register(lhs);
                 self.emit_f32(value);
             },
@@ -644,7 +644,7 @@ impl Generator {
                 let rhs = state.register(*rhs)?;
                 self.emit_op(Op::CompoundBinary);
                 self.emit_register(state.register(id)?);
-                self.emit_u8(binary_code(*op) as u8);
+                self.emit_u8(Binary::from(*op) as u8);
                 self.emit_register(lhs);
                 self.emit_register(rhs);
             },
@@ -1579,49 +1579,6 @@ fn variable_name(module: &ir::Module, pointer: IrNodeId) -> Result<&Identifier, 
     match module.node(pointer).ok_or(CodegenError::MissingNode(pointer))? {
         IrNode::Variable(name) => Ok(name),
         _ => Err(CodegenError::ExpectedVariable(pointer)),
-    }
-}
-
-fn unary_code(op: ir::UnaryOp) -> Unary {
-    match op {
-        ir::UnaryOp::Neg => Unary::Neg,
-        ir::UnaryOp::Not => Unary::Not,
-        ir::UnaryOp::BitNot => Unary::BitNot,
-        ir::UnaryOp::PreIncrement => Unary::PreIncrement,
-        ir::UnaryOp::PreDecrement => Unary::PreDecrement,
-        ir::UnaryOp::PostIncrement => Unary::PostIncrement,
-        ir::UnaryOp::PostDecrement => Unary::PostDecrement,
-        ir::UnaryOp::Reference => Unary::Reference,
-        ir::UnaryOp::Dereference => Unary::Dereference,
-    }
-}
-
-fn binary_code(op: ir::BinaryOp) -> Binary {
-    match op {
-        ir::BinaryOp::Add => Binary::Add,
-        ir::BinaryOp::Sub => Binary::Sub,
-        ir::BinaryOp::Mul => Binary::Mul,
-        ir::BinaryOp::Div => Binary::Div,
-        ir::BinaryOp::Mod => Binary::Mod,
-        ir::BinaryOp::FloatMod => Binary::FloatMod,
-        ir::BinaryOp::Pow => Binary::Pow,
-        ir::BinaryOp::BitAnd => Binary::BitAnd,
-        ir::BinaryOp::BitXor => Binary::BitXor,
-        ir::BinaryOp::BitOr => Binary::BitOr,
-        ir::BinaryOp::CompGreater => Binary::CompGreater,
-        ir::BinaryOp::CompLess => Binary::CompLess,
-        ir::BinaryOp::CompEq => Binary::CompEq,
-        ir::BinaryOp::CompNotEq => Binary::CompNotEq,
-        ir::BinaryOp::CompGreaterEq => Binary::CompGreaterEq,
-        ir::BinaryOp::CompLessEq => Binary::CompLessEq,
-        ir::BinaryOp::CompEquiv => Binary::CompEquiv,
-        ir::BinaryOp::CompNotEquiv => Binary::CompNotEquiv,
-        ir::BinaryOp::CompThreeWay => Binary::CompThreeWay,
-        ir::BinaryOp::LogicalAnd => Binary::LogicalAnd,
-        ir::BinaryOp::LogicalOr => Binary::LogicalOr,
-        ir::BinaryOp::ShiftLeft => Binary::ShiftLeft,
-        ir::BinaryOp::ShiftRight => Binary::ShiftRight,
-        ir::BinaryOp::In => Binary::In,
     }
 }
 

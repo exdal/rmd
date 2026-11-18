@@ -1,3 +1,4 @@
+use ast::{fold_number, fold_unary_number};
 use base::{
     location::SourceLine,
     path::{PathFlags, TreePath},
@@ -2263,9 +2264,14 @@ impl Evaluator<'_> {
         }
 
         Ok(match op {
-            Unary::Neg => (-self.number(&value)?).into(),
+            Unary::Neg | Unary::BitNot => {
+                let number = self.number(&value)?;
+                let folded = fold_unary_number(op.into(), number);
+                folded
+                    .map(Into::into)
+                    .ok_or_else(|| self.fault(FaultKind::Unsupported(format!("{op:?}"))))?
+            },
             Unary::Not => (!value.truthy()).into(),
-            Unary::BitNot => ((!(self.number(&value)? as u32) & 0x00ff_ffff) as f32).into(),
             Unary::PreIncrement | Unary::PostIncrement => (self.number(&value)? + 1.0).into(),
             Unary::PreDecrement | Unary::PostDecrement => (self.number(&value)? - 1.0).into(),
             Unary::Reference | Unary::Dereference => {
@@ -2351,42 +2357,10 @@ impl Evaluator<'_> {
         let left = self.number(&left)?;
         let right = self.number(&right)?;
 
-        if matches!(op, Div | Mod | FloatMod) && right == 0.0 {
-            return Err(self.fault(FaultKind::InvalidOperation("division by zero".into())));
+        match fold_number(op.into(), left, right) {
+            Some(value) => Ok(value.into()),
+            None => Err(self.fault(FaultKind::InvalidOperation("division by zero".into()))),
         }
-
-        Ok(match op {
-            Add => (left + right).into(),
-            Sub => (left - right).into(),
-            Mul => (left * right).into(),
-            Div => (left / right).into(),
-            Mod => {
-                if right.trunc() == 0.0 {
-                    return Err(self.fault(FaultKind::InvalidOperation("division by zero".into())));
-                }
-                (left.trunc() % right.trunc()).into()
-            },
-            FloatMod => (left % right).into(),
-            Pow => left.powf(right).into(),
-            BitAnd => (((left as u32) & (right as u32)) as f32).into(),
-            BitOr => (((left as u32) | (right as u32)) as f32).into(),
-            BitXor => (((left as u32) ^ (right as u32)) as f32).into(),
-            ShiftLeft => (((left as u32).checked_shl(right as u32).unwrap_or(0) & 0x00ff_ffff) as f32).into(),
-            ShiftRight => (((left as u32).checked_shr(right as u32).unwrap_or(0)) as f32).into(),
-            CompLess => (left < right).into(),
-            CompLessEq => (left <= right).into(),
-            CompGreater => (left > right).into(),
-            CompGreaterEq => (left >= right).into(),
-            CompThreeWay => (if left < right {
-                -1.0
-            } else if left > right {
-                1.0
-            } else {
-                0.0
-            })
-            .into(),
-            _ => return Err(self.fault(FaultKind::InvalidOperation(format!("{op:?}")))),
-        })
     }
 
     /// `L += x` changes `L` itself, so every alias of it sees the change
