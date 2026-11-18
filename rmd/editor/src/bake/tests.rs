@@ -1,7 +1,13 @@
-use base::path::TreePath;
+use base::{
+    path::TreePath,
+    types::{Identifier, Value},
+};
 use std::{
     path::PathBuf,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use dmm::{Map, Size};
@@ -11,6 +17,7 @@ use crate::{
     document::command::Edit,
     environment::world::Perspective,
     frame::{self, fixtures, visual},
+    session::Session,
     testing,
 };
 
@@ -567,4 +574,138 @@ fn a_standalone_bake_runs_the_profile_against_an_empty_one_cell_world() {
     environment.bake_program = None;
 
     assert!(standalone.appearance(&environment, &prefab).is_none());
+}
+
+const GENERATED_ICONS: &str = r#"
+/datum/demir/test/bake(atom/target)
+    if(!istype(target, /obj/structure/table))
+        return
+    target.icon = file("gen/" + "made.dmi")
+    target.icon_state = "floor"
+    target.overlays += image(file("gen/" + "over.dmi"), "light")
+"#;
+
+struct GeneratedIcons {
+    session: Session,
+    owner: PrefabInstanceId,
+    dir: PathBuf,
+}
+
+impl GeneratedIcons {
+    fn new(has_files: bool) -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("demir-generated-icons-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(dir.join("gen")).expect("temp dir");
+        if has_files {
+            for name in ["made.dmi", "over.dmi"] {
+                std::fs::copy(examples().join("icons/test.dmi"), dir.join("gen").join(name)).expect("icon");
+            }
+        }
+
+        let mut environment = environment(GENERATED_ICONS);
+        environment.root = dir.join("test.dme");
+
+        let mut map = Map::new(Size { x: 1, y: 1, z: 1 });
+        let key = map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/structure/table"))]);
+        map.grid[0] = vec![vec![key]];
+        let document = MapDocument::new(map, 1);
+        let owner = document.instance_ids_at(Coord::new(1, 1, 1))[0];
+        let bake = build(&environment, &document).expect("baking is on");
+        assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+
+        let mut session = Session::new();
+        session.textures = crate::environment::session::build_textures(&environment, &Progress::new());
+        session.textures.insert_missing_icon().expect("missing icon");
+        session.state.environment = Some(Arc::new(environment));
+        let id = session.state.open_document(document);
+        session.caches.entry(id).or_default().bake = Some(bake);
+        session.rebuild_instances(id);
+
+        Self { session, owner, dir }
+    }
+
+    fn rebuild(&mut self) {
+        let id = self.session.state.active().expect("document");
+        self.session.rebuild_instances(id);
+    }
+
+    fn is_missing(&self) -> bool {
+        let sprite = self
+            .session
+            .instances()
+            .and_then(|instances| instances.sprite(self.owner));
+
+        sprite.is_some_and(|sprite| self.session.textures.is_missing_icon(sprite.texture))
+    }
+}
+
+impl Drop for GeneratedIcons {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.dir).ok();
+    }
+}
+
+#[test]
+fn icons_written_during_a_bake_register_when_the_bake_lands() {
+    let mut generated = GeneratedIcons::new(true);
+    let revision = generated.session.texture_revision();
+
+    assert!(!generated.is_missing());
+    assert!(generated.session.textures.metadata("gen/made.dmi").is_some());
+    assert!(generated.session.textures.metadata("gen/over.dmi").is_some());
+    assert_ne!(generated.session.texture_revision(), 0);
+
+    generated.rebuild();
+
+    assert_eq!(generated.session.texture_revision(), revision);
+    assert!(!generated.is_missing());
+}
+
+#[test]
+fn absent_generated_icons_stay_missing_and_are_retried() {
+    let mut generated = GeneratedIcons::new(false);
+    let revision = generated.session.texture_revision();
+
+    assert!(generated.is_missing());
+    assert!(generated.session.textures.metadata("gen/made.dmi").is_none());
+
+    std::fs::copy(examples().join("icons/test.dmi"), generated.dir.join("gen/made.dmi")).expect("icon");
+    generated.rebuild();
+
+    assert!(!generated.is_missing());
+    assert_ne!(generated.session.texture_revision(), revision);
+}
+
+#[test]
+fn icon_names_follow_overlays_and_underlays_and_keep_only_dmi() {
+    let icon = |name: &str| (Identifier::from(vars::ICON), Value::Resource(name.into()));
+    let delta = AppearanceDelta {
+        vars: vec![icon("a.dmi")],
+        overlays: vec![AppearanceDelta {
+            vars: vec![icon("B/B.DMI")],
+            underlays: vec![AppearanceDelta {
+                vars: vec![icon("c.dmi")],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        underlays: vec![
+            AppearanceDelta {
+                vars: vec![icon("d.png")],
+                ..Default::default()
+            },
+            AppearanceDelta {
+                vars: vec![(Identifier::from(vars::ICON_STATE), Value::Text("e.dmi".into()))],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        icon_names([&delta]),
+        BTreeSet::from(["B/B.DMI".to_string(), "a.dmi".to_string(), "c.dmi".to_string()])
+    );
 }

@@ -4,6 +4,7 @@ use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, Sp
 
 use crate::session::Session;
 use crate::{
+    bake,
     document::{DocumentId, PrefabInstanceId, selection::Selection},
     focus::AreaFocus,
     frame::{
@@ -258,6 +259,13 @@ impl Session {
         if let Some(cache) = self.caches.get_mut(&id) {
             drop(std::mem::take(&mut cache.instances));
         }
+
+        let names = bake::icon_names(
+            bake::appearances(self.caches.get(&id).and_then(|cache| cache.bake.as_ref()))
+                .values()
+                .map(|delta| &**delta),
+        );
+        self.register_icons(names);
 
         let bake = self.caches.get(&id).and_then(|cache| cache.bake.as_ref());
         let node_types = crate::node::session::registered_types(self.state.environment.as_deref(), bake);

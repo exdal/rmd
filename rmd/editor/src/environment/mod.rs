@@ -9,6 +9,7 @@ pub(crate) mod worker;
 pub(crate) mod world;
 
 use base::{
+    file_path,
     location::FileId,
     source::SourceMap,
     types::{Identifier, Value},
@@ -213,6 +214,16 @@ impl Environment {
             })
     }
 
+    pub fn resolve_icon(&self, name: &str) -> Option<PathBuf> {
+        let base = self.base_dir();
+        let exact = file_path::within(base, name)?;
+        if exact.is_file() {
+            return Some(exact);
+        }
+
+        find_resource(base, &self.resource_dirs, name)
+    }
+
     /// `#define FILE_DIR "icons"`
     pub fn load_icons(&mut self, search_dirs: &[PathBuf], progress: &Progress) -> Vec<(String, IconError)> {
         let names: Vec<String> = self.icon_paths().into_iter().map(String::from).collect();
@@ -225,10 +236,7 @@ impl Environment {
                 break;
             }
             progress.advance(&name);
-            let found = std::iter::once(base.as_path())
-                .chain(search_dirs.iter().map(PathBuf::as_path))
-                .find_map(|dir| resolve_resource_path(dir, &name))
-                .unwrap_or_else(|| base.join(&name));
+            let found = find_resource(&base, search_dirs, &name).unwrap_or_else(|| base.join(&name));
 
             match IconFile::load_info(&found) {
                 Ok(info) => {
@@ -279,6 +287,12 @@ fn collect_icon_paths<'a>(value: &'a Value, paths: &mut BTreeSet<&'a str>) {
         },
         _ => {},
     }
+}
+
+fn find_resource(base: &Path, search_dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
+    std::iter::once(base)
+        .chain(search_dirs.iter().map(PathBuf::as_path))
+        .find_map(|dir| resolve_resource_path(dir, name))
 }
 
 fn resolve_resource_path(dir: &Path, relative: &str) -> Option<PathBuf> {

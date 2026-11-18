@@ -389,6 +389,18 @@ impl Session {
     }
 
     pub(crate) fn apply_bake_update(&mut self, id: DocumentId, bake_update: crate::bake::BakeUpdate) {
+        let names = {
+            let appearances = self.caches.get(&id).map(|cache| bake::appearances(cache.bake.as_ref()));
+            bake::icon_names(appearances.iter().flat_map(|appearances| {
+                bake_update
+                    .appearances
+                    .iter()
+                    .filter_map(|owner| appearances.get(&owner.get()))
+                    .map(|delta| &**delta)
+            }))
+        };
+        self.register_icons(names);
+
         let Self {
             state,
             textures,

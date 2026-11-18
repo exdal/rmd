@@ -59,6 +59,10 @@ fn new_sheets(textures: &[TextureData]) -> Vec<Sheet> {
     textures.iter().cloned().map(Sheet::new).collect()
 }
 
+fn kept_sheets<'a>(old: impl IntoIterator<Item = &'a TextureData>, new: &[TextureData]) -> usize {
+    old.into_iter().zip(new).take_while(|(old, new)| old == new).count()
+}
+
 fn builtin_sheets(sheets: &[Sheet]) -> Vec<usize> {
     sheets
         .iter()
@@ -188,6 +192,10 @@ pub(super) fn merge_sheets(set: &mut Vec<u32>, added: &[u32]) {
 }
 
 impl Renderer {
+    pub fn texture_capacity(&self) -> usize {
+        self.bindless.count as usize
+    }
+
     pub fn set_textures(&mut self, catalog: &TextureCatalog) -> Result<(), GpuError> {
         let requested = u32::try_from(catalog.len()).map_err(|_| GpuError::TextureUploadTooLarge)?;
         if requested > self.bindless.count {
@@ -197,14 +205,28 @@ impl Renderer {
             });
         }
 
+        let textures = catalog.textures();
+        let old_len = self.sheets.len();
+        let kept = kept_sheets(self.sheets.iter().map(|sheet| &sheet.data), textures);
+        if kept == old_len && kept == textures.len() {
+            return Ok(());
+        }
+
         self.device.wait_idle()?;
 
-        let old = std::mem::replace(&mut self.sheets, new_sheets(catalog.textures()));
-        destroy_images(&mut self.device, loaded_images(old));
-        self.recorded = None;
-        self.uploaded.clear();
+        let removed = self.sheets.split_off(kept);
+        destroy_images(&mut self.device, loaded_images(removed));
+        self.sheets.extend(new_sheets(&textures[kept..]));
+        if kept < old_len {
+            self.recorded = None;
+            self.uploaded.clear();
+        }
 
-        let uploaded = self.upload_sheets(&builtin_sheets(&self.sheets));
+        let added = builtin_sheets(&self.sheets[kept..])
+            .into_iter()
+            .map(|index| index + kept)
+            .collect::<Vec<_>>();
+        let uploaded = self.upload_sheets(&added);
         self.write_descriptors()?;
 
         uploaded
@@ -386,6 +408,19 @@ mod tests {
         assert_eq!(sheets.len(), 3);
         assert!(sheets.iter().all(|sheet| matches!(sheet.state, SheetState::Unloaded)));
         assert_eq!(builtin_sheets(&sheets), [1]);
+    }
+
+    #[test]
+    fn kept_sheets_is_the_common_prefix() {
+        let catalog = sheet_catalog();
+        let all = catalog.textures();
+
+        assert_eq!(kept_sheets(&all[..2], all), 2);
+        assert_eq!(kept_sheets(all, all), 3);
+        assert_eq!(kept_sheets(all, &all[..1]), 1);
+        assert_eq!(kept_sheets(all, &[all[0].clone(), all[0].clone(), all[2].clone()]), 1);
+        assert_eq!(kept_sheets(all, &[all[1].clone()]), 0);
+        assert_eq!(kept_sheets(&[], all), 0);
     }
 
     fn usage(last_used: Option<u64>, is_pinned: bool) -> SheetUsage {

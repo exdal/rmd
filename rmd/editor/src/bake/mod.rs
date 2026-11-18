@@ -2,9 +2,9 @@ pub(crate) mod panel;
 pub(crate) mod session;
 pub(crate) mod worker;
 
-use base::file_path;
+use base::{file_path, vars};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     ops::Range,
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -306,6 +306,31 @@ pub fn appearances(bake: Option<&Bake>) -> &HashMap<u64, SharedAppearance> {
 
     bake.map(|bake| &bake.appearances)
         .unwrap_or_else(|| EMPTY.get_or_init(HashMap::new))
+}
+
+pub fn icon_names<'a>(deltas: impl IntoIterator<Item = &'a AppearanceDelta>) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for delta in deltas {
+        collect_icon_names(delta, &mut names);
+    }
+
+    names
+}
+
+fn collect_icon_names(delta: &AppearanceDelta, names: &mut BTreeSet<String>) {
+    let icon = delta
+        .vars
+        .iter()
+        .find(|(name, _)| name.as_str() == vars::ICON)
+        .and_then(|(_, value)| value.as_text())
+        .filter(|name| name.to_ascii_lowercase().ends_with(".dmi"));
+    if let Some(icon) = icon {
+        names.insert(icon.to_string());
+    }
+
+    for layer in delta.overlays.iter().chain(&delta.underlays) {
+        collect_icon_names(layer, names);
+    }
 }
 
 trait ModuleTarget {

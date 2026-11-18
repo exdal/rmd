@@ -313,6 +313,7 @@ impl App {
         );
 
         let mut renderer = Renderer::new(device, size.width, size.height, self.session.textures.len())?;
+        self.session.texture_capacity = Some(renderer.texture_capacity());
         renderer.set_textures(&self.session.textures)?;
 
         self.uploaded_texture_revision = Some(self.session.texture_revision());

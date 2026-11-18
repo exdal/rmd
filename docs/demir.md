@@ -351,7 +351,8 @@ runtime errors, so check `demir_trusted()` first. The VM supports the classic te
 A library is looked up under the codebase directory, then in `~/.byond/bin` on Unix, and a name
 with a `64` suffix is tried first (`rust_g64.dll`, `librust_g64.so`). A loaded library stays
 loaded until the editor exits. During a call the working directory is the `.dme`'s directory,
-so a library resolves relative paths there.
+so a library resolves relative paths there. An icon file that a library writes under the codebase
+directory renders once the bake that names it lands.
 
 Random values use a seed based on the target atom's type and coordinates. Repeating a bake for the
 same atom gives the same random sequence. World time and tick usage are deterministic.

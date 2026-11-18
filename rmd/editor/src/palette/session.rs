@@ -5,6 +5,7 @@ use objtree::TypeId;
 use render::{SpriteTexture, texture::TextureCatalog};
 
 use crate::{
+    bake,
     frame::{self, visual},
     session::Session,
     tool::{Tool, place::is_placeable},
@@ -83,11 +84,15 @@ impl Session {
             return cached.clone().or(Some(appearance));
         }
 
-        let derived = environment.tree.id_of(&prefab.path).and_then(|id| {
-            let delta = self.standalone_baker.appearance(&environment, prefab)?;
+        let delta = environment
+            .tree
+            .id_of(&prefab.path)
+            .and_then(|id| Some((id, self.standalone_baker.appearance(&environment, prefab)?)));
+        if let Some((_, delta)) = &delta {
+            self.register_icons(bake::icon_names([delta]));
+        }
 
-            Some(visual::resolve_delta(&environment.tree, id, prefab, &delta))
-        });
+        let derived = delta.map(|(id, delta)| visual::resolve_delta(&environment.tree, id, prefab, &delta));
         if self.standalone.len() >= STANDALONE_CACHE_LIMIT {
             self.standalone.clear();
         }

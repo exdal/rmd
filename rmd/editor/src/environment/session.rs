@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use dmi::IconFile;
 use dmm::{Map, error::MapError};
 use objtree::{ObjectTree, TypeId};
 use render::texture::TextureCatalog;
@@ -57,6 +58,52 @@ fn is_hidden(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.starts_with('.'))
+}
+
+impl Session {
+    pub(crate) fn register_icons(&mut self, names: BTreeSet<String>) {
+        let Some(environment) = self.state.environment.clone() else {
+            return;
+        };
+
+        let mut is_added = false;
+        for name in names {
+            if self.textures.metadata(&name).is_some() {
+                continue;
+            }
+
+            if self
+                .texture_capacity
+                .is_some_and(|capacity| self.textures.len() >= capacity)
+            {
+                log::warn!("texture capacity reached, '{name}' and later icons stay unregistered");
+                break;
+            }
+
+            let Some(path) = environment.resolve_icon(&name) else {
+                log::debug!("icon '{name}' not found");
+                continue;
+            };
+
+            let info = match IconFile::load_info(&path) {
+                Ok(info) => info,
+                Err(e) => {
+                    log::debug!("icon '{name}': {e}");
+                    continue;
+                },
+            };
+            if let Err(e) = self.textures.insert_info(&name, &info) {
+                log::debug!("icon '{name}': {e}");
+                continue;
+            }
+
+            is_added = true;
+        }
+
+        if is_added {
+            self.texture_revision = self.texture_revision.wrapping_add(1);
+        }
+    }
 }
 
 pub(crate) fn build_textures(environment: &Environment, progress: &Progress) -> TextureCatalog {
