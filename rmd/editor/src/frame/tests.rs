@@ -1756,3 +1756,28 @@ fn tiles_land_on_pixel_positions_from_their_coordinates() {
     assert_eq!(sprites.len(), 1);
     assert_eq!((sprites[0].x, sprites[0].y), (32.0, 0.0));
 }
+
+#[test]
+fn a_missing_state_draws_the_blank_state() {
+    let mut textures = TextureCatalog::new();
+    textures.insert(ICON, &icon_file(&["floor", ""])).expect("insert");
+    let appearance = |state: &str| Appearance {
+        icon: Some(String::from(ICON)),
+        icon_state: Some(String::from(state)),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        super::sprite_texture(&textures, &appearance("nope")),
+        textures.lookup(ICON, 1)
+    );
+    assert_eq!(
+        super::sprite_texture(&textures, &appearance("floor")),
+        textures.lookup(ICON, 0)
+    );
+
+    let mut textures = TextureCatalog::new();
+    textures.insert(ICON, &icon_file(&["floor"])).expect("insert");
+
+    assert_eq!(super::sprite_texture(&textures, &appearance("nope")), None);
+}

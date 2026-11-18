@@ -105,6 +105,10 @@ impl Metadata {
         self.states.iter().find(|state| state.name == name)
     }
 
+    pub fn find_or_blank(&self, name: &str) -> Option<&IconState> {
+        self.find(name).or_else(|| self.find(""))
+    }
+
     pub fn sprite_rect(&self, index: usize, sheet_width: u32) -> (u32, u32, u32, u32) {
         let columns = (sheet_width / self.width).max(1) as usize;
         let x = (index % columns) as u32 * self.width;
@@ -225,6 +229,20 @@ mod tests {
         let table = metadata.find("table").unwrap();
         assert_eq!(table.offset, 4);
         assert_eq!(table.delays, vec![2.0, 2.0]);
+    }
+
+    #[test]
+    fn find_or_blank_falls_back_to_the_unnamed_state() {
+        let mut metadata = Metadata::parse_description(DESCRIPTION).unwrap();
+        assert!(metadata.find_or_blank("missing").is_none());
+        assert_eq!(metadata.find_or_blank("chair").unwrap().name, "chair");
+
+        let mut blank = metadata.find("table").unwrap().clone();
+        blank.name = String::new();
+        metadata.states.push(blank);
+
+        assert_eq!(metadata.find_or_blank("chair").unwrap().name, "chair");
+        assert_eq!(metadata.find_or_blank("missing").unwrap().name, "");
     }
 
     #[test]

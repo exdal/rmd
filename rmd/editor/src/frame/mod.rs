@@ -487,7 +487,7 @@ pub fn sprite_texture(textures: &TextureCatalog, appearance: &Appearance) -> Opt
     let state = appearance.icon_state.as_deref().unwrap_or("");
     let metadata = textures.metadata(icon)?;
     let dir = Dir::from_bits(appearance.dir).unwrap_or(Dir::South);
-    let cell = metadata.find(state)?.sprite_index(dir, 0);
+    let cell = metadata.find_or_blank(state)?.sprite_index(dir, 0);
 
     textures.lookup(icon, cell)
 }

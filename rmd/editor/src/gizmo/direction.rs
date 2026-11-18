@@ -46,7 +46,7 @@ pub(crate) fn direction_state(
         .icon
         .as_deref()
         .and_then(|icon| textures.metadata(icon))
-        .and_then(|metadata| metadata.find(appearance.icon_state.as_deref().unwrap_or_default()))
+        .and_then(|metadata| metadata.find_or_blank(appearance.icon_state.as_deref().unwrap_or_default()))
         .map(|state| state.dirs);
 
     DirectionState {
