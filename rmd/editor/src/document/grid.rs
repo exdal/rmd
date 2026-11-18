@@ -83,10 +83,13 @@ impl Grid {
             next_id: 1,
             table: PrefabTable::default(),
         };
-        let shared = map
-            .dictionary
-            .iter()
-            .map(|(key, tile)| (*key, grid.intern(tile)))
+
+        // sorted, so of prefabs spelled differently the lowest key's spelling is the one kept
+        let mut keys = map.dictionary.keys().copied().collect::<Vec<_>>();
+        keys.sort_unstable();
+        let shared = keys
+            .into_iter()
+            .map(|key| (key, grid.intern(&map.dictionary[&key])))
             .collect::<HashMap<_, _>>();
         let empty = Arc::<[PrefabId]>::from([]);
 

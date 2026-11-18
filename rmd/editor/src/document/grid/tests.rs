@@ -221,3 +221,24 @@ fn identical_matches_prefabs_written_differently() {
 
     assert_eq!(grid.identical(&smes), grid.ids_at(Coord::new(2, 2, 1))[..1]);
 }
+
+#[test]
+fn the_lowest_key_spells_a_prefab_written_two_ways() {
+    let source = r#""aa" = (/obj/item{damage = 1.30},/turf/open/floor)
+"ab" = (/obj/item{damage = 1.3},/turf/open/floor)
+
+(1,1,1) = {"
+aaab
+"}
+"#;
+
+    // each parse gets a new hash seed, so this covers several dictionary orders
+    for _ in 0..16 {
+        let (map, errors) = parser::parse(source);
+        assert!(errors.is_empty(), "{errors:?}");
+        let grid = Grid::from_map(&map);
+        let tile = grid.tile_at(Coord::new(2, 1, 1)).unwrap();
+
+        assert_eq!(tile[0].vars[0].1.verbatim(), Some("1.30"));
+    }
+}
