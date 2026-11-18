@@ -2,7 +2,8 @@ use base::path::TreePath;
 use std::{ffi::CStr, path::PathBuf};
 
 use dear_imgui_rs::{Condition, Key, MouseButton, Ui, sys};
-use dmm::{Prefab, Size};
+use dmm::Size;
+use prefab::Prefab;
 use render::MapViewInteraction;
 use ui::testing::rectangle_context;
 

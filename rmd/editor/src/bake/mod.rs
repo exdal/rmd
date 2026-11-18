@@ -2,7 +2,7 @@ pub(crate) mod panel;
 pub(crate) mod session;
 pub(crate) mod worker;
 
-use base::{file_path, vars};
+use base::{coord::Coord, file_path, vars};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     ops::Range,
@@ -10,7 +10,7 @@ use std::{
     sync::OnceLock,
 };
 
-use dmm::{Coord, Prefab, PrefabInstanceId};
+use prefab::{Prefab, PrefabInstanceId};
 pub use vm::{
     AppearanceDelta,
     bake::{

@@ -1,12 +1,12 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 
-use dmm::{Coord, Prefab};
+use prefab::{Prefab, PrefabInstanceId, PrefabLocation};
 use render::SpriteInstance;
 
 use crate::{
     document::{
-        DocumentId, MapDocument, PrefabInstanceId, command::EditGroupId, instance::InstanceChange,
-        instance::PrefabLocation, instance::VarMutation, selection::Selection,
+        DocumentId, MapDocument, command::EditGroupId, instance::InstanceChange, instance::VarMutation,
+        selection::Selection,
     },
     frame::visual,
     gizmo::direction::{DirectionalTypes, direction_state},

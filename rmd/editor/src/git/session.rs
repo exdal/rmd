@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
-use dmm::Coord;
+use base::coord::Coord;
 
 use super::{
     blame::session::BlameState,
@@ -397,7 +397,8 @@ impl Session {
 mod tests {
     use std::path::PathBuf;
 
-    use dmm::{Coord, Map, Size};
+    use base::coord::Coord;
+    use dmm::{Map, Size};
 
     use crate::session::{Session, fixtures::conflicted_session};
 

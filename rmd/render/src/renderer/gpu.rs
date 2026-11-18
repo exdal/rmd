@@ -1,4 +1,5 @@
 use crate::{AREA_EDGES_ALL, GpuError, SpriteInstance};
+use prefab::PrefabInstanceId;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -143,7 +144,7 @@ pub(super) fn gpu_sprite(index: usize, sprite: &SpriteInstance) -> Result<GpuSpr
     })
 }
 
-pub(super) fn owner_words(owner: dmm::PrefabInstanceId) -> [u32; 2] {
+pub(super) fn owner_words(owner: PrefabInstanceId) -> [u32; 2] {
     split_owner(owner.get())
 }
 
@@ -224,7 +225,7 @@ fn pack_u16x2(values: [u32; 2]) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use dmm::PrefabInstanceId;
+    use prefab::PrefabInstanceId;
 
     use super::*;
     use crate::{

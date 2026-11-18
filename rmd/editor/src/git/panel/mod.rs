@@ -5,8 +5,8 @@ mod legend;
 pub(crate) mod tooltip;
 mod versions;
 
+use base::coord::Coord;
 use dear_imgui_rs::{TabItemFlags, Ui, WindowKey, WindowKeyError};
-use dmm::Coord;
 use ui::{
     icons::materialdesignicons::{
         ICON_ALERT, ICON_ALERT_CIRCLE, ICON_CLOSE_THICK, ICON_REFRESH, ICON_SOURCE_BRANCH, ICON_SOURCE_MERGE,

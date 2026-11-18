@@ -1,4 +1,6 @@
-use crate::document::{DocumentId, PrefabInstanceId};
+use prefab::PrefabInstanceId;
+
+use crate::document::DocumentId;
 use crate::{bake::session::report_bake_output, session::Session};
 
 impl Session {

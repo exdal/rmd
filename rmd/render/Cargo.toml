@@ -7,8 +7,9 @@ edition.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-dmm.workspace = true
+base.workspace = true
 dmi.workspace = true
+prefab.workspace = true
 
 vir = { git = "https://github.com/exdal/vir.git", package = "vir" }
 ash = "0.38.0"

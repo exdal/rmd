@@ -1,4 +1,9 @@
 pub use crate::interner::Symbol as Identifier;
+use std::{
+    hash::{Hash, Hasher},
+    mem,
+};
+
 use crate::path::TreePath;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,6 +99,27 @@ pub enum Value {
 pub struct ListEntry {
     pub key: Value,
     pub value: Option<Value>,
+}
+
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        mem::discriminant(self).hash(state);
+        match self {
+            Value::Null | Value::Unevaluated => {},
+            // `0.0 == -0.0`
+            Value::Num(v) => (if *v == 0.0 { 0 } else { v.to_bits() }).hash(state),
+            Value::Text(s) | Value::Resource(s) => s.hash(state),
+            Value::Path(p) => p.hash(state),
+            Value::List(entries) => entries.hash(state),
+        }
+    }
+}
+
+impl Hash for ListEntry {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+        self.value.hash(state);
+    }
 }
 
 impl Value {
@@ -274,7 +300,9 @@ impl std::ops::BitOrAssign for InputType {
 }
 #[cfg(test)]
 mod tests {
-    use super::{InputType, IrNodeId, ProcId, decode_string};
+    use std::hash::{BuildHasher, RandomState};
+
+    use super::{InputType, IrNodeId, ListEntry, ProcId, Value, decode_string};
 
     /// The disassembly form comes off `Display`, so `Debug` on a container prints it too.
     #[test]
@@ -292,6 +320,25 @@ mod tests {
         assert!(IrNodeId(0).is_valid());
         assert_eq!(format!("{}", IrNodeId::INVALID), "%-");
         assert_eq!(format!("{}", ProcId::INVALID), "%-");
+    }
+
+    #[test]
+    fn equal_values_hash_the_same() {
+        let hasher = RandomState::new();
+        let list = |zero: f32| {
+            Value::List(vec![ListEntry {
+                key: Value::Text("a".into()),
+                value: Some(Value::Num(zero)),
+            }])
+        };
+
+        assert_eq!(Value::Num(0.0), Value::Num(-0.0));
+        assert_eq!(hasher.hash_one(Value::Num(0.0)), hasher.hash_one(Value::Num(-0.0)));
+        assert_eq!(hasher.hash_one(list(0.0)), hasher.hash_one(list(-0.0)));
+        assert_ne!(
+            hasher.hash_one(Value::Text("a".into())),
+            hasher.hash_one(Value::Resource("a".into()))
+        );
     }
 
     #[test]

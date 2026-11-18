@@ -1,4 +1,5 @@
 use base::{
+    coord::Coord,
     types::{Identifier, Value},
     vars,
 };
@@ -8,8 +9,8 @@ use std::{
 };
 
 use bitflags::bitflags;
-use dmm::{Coord, Prefab, PrefabInstanceId};
 use objtree::{ObjectTree, TypeId};
+use prefab::{Prefab, PrefabInstanceId};
 use vm::bake::{NodeGroup, NodePortRule};
 
 use crate::{

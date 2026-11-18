@@ -1,13 +1,10 @@
 use std::collections::HashSet;
 
-use dmm::Coord;
+use base::coord::Coord;
+use prefab::PrefabInstanceId;
 use render::GuideLine;
 
-use crate::{
-    document::{DocumentId, PrefabInstanceId},
-    frame::visual,
-    session::Session,
-};
+use crate::{document::DocumentId, frame::visual, session::Session};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GuideBadge {

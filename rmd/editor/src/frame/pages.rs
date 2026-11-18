@@ -1,10 +1,10 @@
 use base::bitset::BitSet;
+use prefab::PrefabInstanceId;
 use std::{cmp::Reverse, collections::BTreeMap};
 
 use render::{SpriteInstance, SpriteTexture, UpdateRange};
 
 use super::{FIRST_PLACEMENT, FrameInstances, PrefabUpdate, RenderedPrefab, SpriteKey, TypeVisibility};
-use crate::document::PrefabInstanceId;
 
 const PAGE_CAPACITY: usize = 256;
 /// number of sprites to fill into a page during load, left is spare to make tweaks faster

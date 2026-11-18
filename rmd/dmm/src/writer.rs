@@ -1,7 +1,8 @@
 use base::{path::TreePath, types::Value};
+use prefab::{Prefab, VarValue};
 use std::{fmt::Write, path::Path};
 
-use crate::{Map, MapFormat, Prefab, Tile, VarValue, key::Key};
+use crate::{Map, MapFormat, Tile, key::Key};
 
 /// `dmm2tgm.py` reconversion guard
 const TGM_HEADER: &str = "//MAP CONVERTED BY dmm2tgm.py THIS HEADER COMMENT PREVENTS RECONVERSION, DO NOT REMOVE\n";
@@ -172,7 +173,7 @@ fn write_path(out: &mut impl Write, path: &TreePath) -> std::fmt::Result {
 }
 
 fn write_var(out: &mut impl Write, var: &VarValue) -> std::fmt::Result {
-    match var.verbatim() {
+    match var.spelling() {
         Some(source) => out.write_str(source),
         None => write_value(out, &var.value),
     }
@@ -222,9 +223,10 @@ pub fn write(map: &Map) -> String {
 #[cfg(test)]
 mod tests {
     use base::{path::TreePath, types::Value};
+    use prefab::Prefab;
 
     use crate::{
-        Map, MapFormat, Prefab, Size,
+        Map, MapFormat, Size,
         key::Key,
         parser::parse,
         writer::{MapWriter, format_value, write},

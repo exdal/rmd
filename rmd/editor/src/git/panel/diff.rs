@@ -1,7 +1,7 @@
+use base::coord::Coord;
 use dear_imgui_rs::{
     ItemHoveredFlags, ListClipper, SelectableFlags, TableColumnFlags, TableFlags, TableSizingPolicy, TreeNodeFlags, Ui,
 };
-use dmm::Coord;
 use ui::{
     icons::materialdesignicons::{ICON_ARROW_RIGHT, ICON_FILE_COMPARE, ICON_RESTORE},
     widgets::{

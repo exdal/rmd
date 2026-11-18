@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use dmm::{Coord, Prefab};
+use base::coord::Coord;
 use objtree::ObjectTree;
+use prefab::Prefab;
 
 use crate::{
     clipboard::{has_kind, merge_pasted},

@@ -1,5 +1,5 @@
+use base::coord::Coord;
 use dear_imgui_rs::{MouseButton, Ui};
-use dmm::Coord;
 use render::{InteractionMode, MapViewInteraction, PickRequest};
 
 use super::{

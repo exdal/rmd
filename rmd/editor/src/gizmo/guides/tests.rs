@@ -1,7 +1,8 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::Prefab;
 use render::GuideLine;
 
 use super::GuideBadge;

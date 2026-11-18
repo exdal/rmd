@@ -1,10 +1,11 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::Prefab;
 
 use super::validate_level;
 use crate::{
-    document::{MapDocument, selection::Selection},
+    document::{MapDocument, grid::TileView, selection::Selection},
     session::{
         LevelChange, Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},
@@ -23,8 +24,12 @@ fn resizing_the_map_rebuilds_the_render_cache_and_undo_restores_it() {
         let size = session.map().unwrap().size();
         assert_eq!((size.x, size.y), (width, height));
         assert_eq!(
-            session.map().unwrap().tile_at(Coord::new(width, height, 1)),
-            Some(&fill)
+            session
+                .map()
+                .unwrap()
+                .tile_at(Coord::new(width, height, 1))
+                .map(TileView::to_tile),
+            Some(fill.clone())
         );
         assert_eq!(session.extent_px(), (width as f32 * tile, height as f32 * tile));
         assert_render_cache_matches_rebuild(&session);
@@ -38,8 +43,12 @@ fn resizing_the_map_rebuilds_the_render_cache_and_undo_restores_it() {
         let size = session.map().unwrap().size();
         assert_eq!((size.x, size.y), (width, height));
         assert_eq!(
-            session.map().unwrap().tile_at(Coord::new(width, height, 1)),
-            Some(&fill)
+            session
+                .map()
+                .unwrap()
+                .tile_at(Coord::new(width, height, 1))
+                .map(TileView::to_tile),
+            Some(fill.clone())
         );
         assert_render_cache_matches_rebuild(&session);
     }
@@ -185,7 +194,7 @@ fn baked_levels() -> Session {
 fn loaded_conflicts_block_level_deletion_and_history_even_when_hidden() {
     let mut session = crate::session::fixtures::conflicted_session();
     let id = session.state.active().unwrap();
-    let fill = session.map().unwrap().tile_at(Coord::new(1, 1, 1)).unwrap().clone();
+    let fill = session.map().unwrap().tile_at(Coord::new(1, 1, 1)).unwrap().to_tile();
     session.create_level(id, &fill).unwrap();
     session.git_enabled = false;
     assert!(!session.can_delete_level(id));
@@ -359,8 +368,8 @@ fn changing_up_from_the_last_level_requests_and_uses_a_fill_type() {
     assert!(document.is_dirty());
     for x in 1..=2 {
         assert_eq!(
-            document.map.tile_at(Coord::new(x, 1, 2)),
-            Some(&fill),
+            document.map.tile_at(Coord::new(x, 1, 2)).map(TileView::to_tile),
+            Some(fill.clone()),
             "the chosen turf and area"
         );
     }
@@ -419,6 +428,13 @@ fn level_creation_can_exceed_255_levels() {
         assert_eq!(session.create_level(id, &fill), Ok(z));
         assert_eq!(session.z(), z);
         assert_eq!(session.level_count(), z);
-        assert_eq!(session.map().unwrap().tile_at(Coord::new(1, 1, z)), Some(&fill));
+        assert_eq!(
+            session
+                .map()
+                .unwrap()
+                .tile_at(Coord::new(1, 1, z))
+                .map(TileView::to_tile),
+            Some(fill.clone())
+        );
     }
 }

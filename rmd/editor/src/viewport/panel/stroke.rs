@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
-use dmm::{Coord, Prefab, PrefabInstanceId};
+use base::coord::Coord;
+use prefab::{Prefab, PrefabInstanceId};
 use render::PlacementFlash;
 
 use crate::{

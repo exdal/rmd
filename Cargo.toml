@@ -16,6 +16,7 @@ ir = { path = "rmd/ir" }
 lexer = { path = "rmd/lexer" }
 net = { path = "rmd/net" }
 objtree = { path = "rmd/objtree" }
+prefab = { path = "rmd/prefab" }
 prelude = { path = "rmd/prelude" }
 preprocessor = { path = "rmd/preprocessor" }
 protocol = { path = "rmd/protocol" }

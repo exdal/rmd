@@ -8,8 +8,9 @@ use std::{
     thread,
 };
 
-use dmm::{Map, Prefab};
+use dmm::Map;
 use objtree::TypeId;
+use prefab::Prefab;
 use render::texture::TextureCatalog;
 
 use crate::{

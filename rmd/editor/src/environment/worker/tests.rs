@@ -1,3 +1,4 @@
+use base::coord::Coord;
 use std::{
     path::{Path, PathBuf},
     time::Instant,
@@ -57,16 +58,14 @@ fn unmerged_map_loads_from_stages_and_can_be_saved_and_staged() {
         super::load_map_with_git(&path, 1, &crate::environment::progress::Progress::new(), true, None).unwrap();
     assert_eq!(loaded.conflict.as_ref().unwrap().conflicts.len(), 1);
     assert_eq!(
-        loaded.map.tile_at(dmm::Coord::new(1, 1, 1)).unwrap()[0]
-            .path
-            .to_string(),
+        loaded.map.tile_at(Coord::new(1, 1, 1)).unwrap()[0].path.to_string(),
         "/turf/wall"
     );
     let mut session = crate::session::Session::new();
     session.apply_map(loaded);
     let id = session.state.active().unwrap();
     assert!(session.state.document(id).unwrap().is_dirty());
-    assert!(session.resolve_conflict(id, &[dmm::Coord::new(1, 1, 1)], crate::git::conflict::Side::Theirs));
+    assert!(session.resolve_conflict(id, &[Coord::new(1, 1, 1)], crate::git::conflict::Side::Theirs));
     session.save_map().unwrap();
     assert!(session.mark_resolved(id));
     let deadline = Instant::now() + std::time::Duration::from_secs(10);

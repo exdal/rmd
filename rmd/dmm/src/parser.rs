@@ -1,17 +1,29 @@
 use base::{
+    coord::Coord,
     location::Position,
     path::{PathFlags, TreePath},
     types::{Identifier, ListEntry, Value},
 };
+use prefab::Prefab;
 use std::{collections::HashMap, path::Path};
 
 use crate::{
-    Coord, Map, MapFormat, Prefab, Size, Tile,
+    Map, MapFormat, Size, Tile,
     error::{MapError, MapErrorKind},
     key::Key,
+    writer::write_value,
 };
 
 pub type MapResult<T> = Result<T, MapError>;
+
+fn custom_spelling(value: &Value, source: &str) -> Option<String> {
+    let mut canonical = String::with_capacity(source.len());
+
+    match write_value(&mut canonical, value) {
+        Ok(()) if canonical == source => None,
+        _ => Some(source.to_string()),
+    }
+}
 
 /// `(x,y,z) = {" ... "}`
 struct Block {
@@ -308,7 +320,8 @@ impl<'a> MapParser<'a> {
             let value_start = self.offset;
             let value = self.parse_value()?;
             let source = self.slice_from(value_start)?;
-            prefab.set_var_from_source(Identifier::from(name), value, source);
+            let spelling = custom_spelling(&value, source);
+            prefab.set_var_with_spelling(Identifier::from(name), value, spelling);
 
             self.skip_trivial();
             if self.eat(b';') {
@@ -356,7 +369,7 @@ impl<'a> MapParser<'a> {
 
                 match word {
                     "null" => Ok(Value::Null),
-                    // `newlist(/obj/a, /obj/b)` keeps its spelling through the prefab's verbatim source
+                    // `newlist(/obj/a, /obj/b)` is written back through `VarValue::spelling`
                     "list" | "newlist" if self.peek() == Some(b'(') => self.parse_list(),
                     // `displayed = new/obj/item/captaingun`
                     "new" if self.at_new_path() => self.parse_new(),
@@ -718,10 +731,14 @@ pub fn load(path: impl AsRef<Path>) -> std::io::Result<(Map, Vec<MapError>)> {
 
 #[cfg(test)]
 mod tests {
-    use base::types::{Identifier, Value};
+    use base::{
+        coord::Coord,
+        types::{Identifier, Value},
+    };
+    use prefab::VarValue;
 
     use crate::{
-        Coord, MapFormat, VarValue,
+        MapFormat,
         error::MapErrorKind,
         key::Key,
         parser::{parse, parse_value},
@@ -905,7 +922,7 @@ mod tests {
         ));
 
         assert_eq!(vars[0].1.value, Value::Text(String::from("Owlery")));
-        assert_eq!(vars[0].1.verbatim(), Some("(\"Owlery\")"));
+        assert_eq!(vars[0].1.spelling(), Some("(\"Owlery\")"));
     }
 
     #[test]
@@ -922,13 +939,13 @@ mod tests {
                 .map(|(_, var)| var.clone())
         };
 
-        assert_eq!(get("plain").and_then(|var| var.verbatim().map(str::to_string)), None);
-        assert_eq!(get("tight").and_then(|var| var.verbatim().map(str::to_string)), None);
+        assert_eq!(get("plain").and_then(|var| var.spelling().map(str::to_string)), None);
+        assert_eq!(get("tight").and_then(|var| var.spelling().map(str::to_string)), None);
 
-        assert_eq!(get("exponent").as_ref().and_then(VarValue::verbatim), Some("2e+005"));
-        assert_eq!(get("trailing").as_ref().and_then(VarValue::verbatim), Some("1.30"));
+        assert_eq!(get("exponent").as_ref().and_then(VarValue::spelling), Some("2e+005"));
+        assert_eq!(get("trailing").as_ref().and_then(VarValue::spelling), Some("1.30"));
         assert_eq!(
-            get("spaced").as_ref().and_then(VarValue::verbatim),
+            get("spaced").as_ref().and_then(VarValue::spelling),
             Some("list(\"a\", \"b\")")
         );
 
@@ -943,7 +960,7 @@ mod tests {
         ));
 
         assert!(matches!(&vars[0].1.value, Value::List(entries) if entries.len() == 2));
-        assert_eq!(vars[0].1.verbatim(), Some(source));
+        assert_eq!(vars[0].1.spelling(), Some(source));
     }
 
     #[test]
@@ -954,7 +971,7 @@ mod tests {
             ));
 
             assert_eq!(vars[0].1.value, Value::Unevaluated);
-            assert_eq!(vars[0].1.verbatim(), Some(source));
+            assert_eq!(vars[0].1.spelling(), Some(source));
             assert_eq!(vars[1].1.value, Value::Num(6.0));
         }
     }
@@ -979,10 +996,10 @@ mod tests {
             .and_then(|tile| tile.first())
             .cloned()
             .unwrap();
-        assert!(prefab.vars[0].1.verbatim().is_some());
+        assert!(prefab.vars[0].1.spelling().is_some());
 
         prefab.set_var("charge".into(), Value::Num(2e5));
-        assert!(prefab.vars[0].1.verbatim().is_none());
+        assert!(prefab.vars[0].1.spelling().is_none());
     }
 
     #[test]

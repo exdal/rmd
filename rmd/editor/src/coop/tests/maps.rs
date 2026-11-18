@@ -45,7 +45,11 @@ fn a_failed_reshare_resyncs_the_map_from_the_server() {
     });
 
     let document = session.state.document_mut(id).unwrap();
-    let fill = document.map.tile_at(Coord::new(1, 1, 1)).cloned().unwrap();
+    let fill = document
+        .map
+        .tile_at(Coord::new(1, 1, 1))
+        .map(TileView::to_tile)
+        .unwrap();
     assert!(document.resize(3, 1, &fill));
     session.share_coop_document(id);
 

@@ -1,6 +1,7 @@
-use base::types::{Identifier, Value};
-
-use dmm::Coord;
+use base::{
+    coord::Coord,
+    types::{Identifier, Value},
+};
 
 use super::state::{DragMember, DragState};
 use crate::{document::instance::VarMutation, gizmo::transform::anchor_to_tile, inspector::panel::TransformMode};

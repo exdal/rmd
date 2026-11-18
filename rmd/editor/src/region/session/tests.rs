@@ -1,11 +1,11 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 
-use dmm::{Coord, Prefab};
+use prefab::{Prefab, PrefabInstanceId};
 
 use vm::world::Position;
 
 use crate::{
-    document::{PrefabInstanceId, selection::Selection},
+    document::{grid::TileView, selection::Selection},
     session::{
         BakeHold, FillOutcome, Session,
         fixtures::{assert_render_cache_matches_rebuild, examples, flat_session, focus_session, settle_bake},
@@ -163,7 +163,7 @@ fn one_tile_region_placements_update_multi_level_render_caches() {
         let source = Coord::new(1, 1, 1);
         let destination = Coord::new(2, 1, 1);
         let untouched = Coord::new(1, 1, 5);
-        let untouched_before = session.map().unwrap().tile_at(untouched).unwrap().clone();
+        let untouched_before = session.map().unwrap().tile_at(untouched).unwrap().to_tile();
         session.set_tool(Tool::Select);
         assert!(session.select_region(Some(Selection::from_drag(source, source))));
         let revision = session.revision();
@@ -179,7 +179,10 @@ fn one_tile_region_placements_update_multi_level_render_caches() {
             session.selection(),
             Some(Selection::from_drag(destination, destination))
         );
-        assert_eq!(session.map().unwrap().tile_at(untouched), Some(&untouched_before));
+        assert_eq!(
+            session.map().unwrap().tile_at(untouched).map(TileView::to_tile),
+            Some(untouched_before.clone())
+        );
         assert_eq!(session.revision(), revision.wrapping_add(1));
         assert_eq!(session.frame_update().unwrap().previous_revision, revision);
         assert_render_cache_matches_rebuild(&session);
@@ -192,7 +195,7 @@ fn rect_fill_commits_the_palette_across_the_rect_and_keeps_the_selection() {
     let source = Coord::new(1, 1, 1);
     let destination = Coord::new(2, 1, 1);
     let untouched = Coord::new(1, 1, 5);
-    let untouched_before = session.map().unwrap().tile_at(untouched).unwrap().clone();
+    let untouched_before = session.map().unwrap().tile_at(untouched).unwrap().to_tile();
     let table = session
         .tree()
         .unwrap()
@@ -223,7 +226,10 @@ fn rect_fill_commits_the_palette_across_the_rect_and_keeps_the_selection() {
             .iter()
             .any(|placed| placed == &prefab)
     );
-    assert_eq!(session.map().unwrap().tile_at(untouched), Some(&untouched_before));
+    assert_eq!(
+        session.map().unwrap().tile_at(untouched).map(TileView::to_tile),
+        Some(untouched_before.clone())
+    );
     assert_eq!(session.revision(), revision.wrapping_add(1));
     assert_eq!(session.frame_update().unwrap().previous_revision, revision);
     assert_render_cache_matches_rebuild(&session);

@@ -1,13 +1,11 @@
 use base::vars;
+use prefab::PrefabInstanceId;
 
 use dear_imgui_rs::{Ui, WindowKey, WindowKeyError};
 use ui::widgets::focus_window_on_hover;
 
 use crate::{
-    app::external_editor::SourceLocation,
-    document::{DocumentId, PrefabInstanceId},
-    inspector::session::EditScope,
-    session::Session,
+    app::external_editor::SourceLocation, document::DocumentId, inspector::session::EditScope, session::Session,
     settings::Settings,
 };
 

@@ -1,13 +1,15 @@
+use base::coord::Coord;
 use dear_imgui_rs::MouseCursor;
 use dmi::metadata::Dir;
-use dmm::{Coord, Size};
+use dmm::Size;
+use prefab::PrefabInstanceId;
 
 use super::{
     GizmoMapView,
     direction::{clockwise_index, is_diagonal},
 };
 use crate::{
-    document::{PrefabInstanceId, command::EditGroupId, selection::Selection},
+    document::{command::EditGroupId, selection::Selection},
     gizmo::direction::DirectionState,
     inspector::panel::TransformMode,
     tool::SelectionRotation,

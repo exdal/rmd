@@ -1,15 +1,16 @@
 use base::{
+    coord::Coord,
     types::{Identifier, Value},
     vars,
 };
 use std::collections::{HashMap, HashSet};
 
-use dmm::{Coord, Prefab};
+use prefab::{Prefab, PrefabInstanceId};
 
 use crate::session::Session;
 use crate::{
     document::{
-        DocumentId, PrefabInstanceId,
+        DocumentId,
         command::{Edit, EditGroupId},
         instance::PlacedTile,
     },

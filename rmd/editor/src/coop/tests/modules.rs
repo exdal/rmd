@@ -1,3 +1,4 @@
+use base::coord::Coord;
 use std::error::Error;
 
 use super::*;
@@ -96,7 +97,7 @@ fn a_shared_map_placed_as_a_module_is_read_only() -> TestResult {
     assert!(is_read_only(&session, module));
     assert!(!is_read_only(&session, main));
     session.set_active_document(module);
-    assert!(session.place_at(dmm::Coord::new(1, 1, 1), None).is_none());
+    assert!(session.place_at(Coord::new(1, 1, 1), None).is_none());
 
     Ok(())
 }
@@ -241,7 +242,7 @@ fn a_remote_edit_to_a_locked_module_shows_up_in_its_container() -> TestResult {
 
     assert!(is_read_only(&session, module));
     assert_eq!(
-        top(&session, &fixture.dir.join("a.dmm"), dmm::Coord::new(1, 1, 1)).as_deref(),
+        top(&session, &fixture.dir.join("a.dmm"), Coord::new(1, 1, 1)).as_deref(),
         Some(MODULE)
     );
     assert!(has(&session, 2, MODULE));

@@ -3,13 +3,14 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
+use base::coord::Coord;
 use dmi::metadata::Dir;
-use dmm::Coord;
 use objtree::{ObjectTree, TypeId};
+use prefab::PrefabInstanceId;
 use render::{SpriteInstance, SpriteTexture, UpdateRange, texture::TextureCatalog};
 use vm::matrix::Matrix;
 
-use crate::{document::PrefabInstanceId, maploader::preview::MapView};
+use crate::maploader::preview::MapView;
 
 pub(crate) mod area;
 mod context;

@@ -1,10 +1,11 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
+use prefab::{Prefab, PrefabInstanceId};
 
 use super::{PAGE_CAPACITY, assert_pages_hold};
 use crate::{
-    document::{MapDocument, PrefabInstanceId, command::Edit},
+    document::{MapDocument, command::Edit},
     environment::world::Perspective,
     frame::{
         PrefabUpdate,

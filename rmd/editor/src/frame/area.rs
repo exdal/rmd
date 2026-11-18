@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
-use dmm::{Coord, Prefab};
+use base::coord::Coord;
 use objtree::{ObjectTree, TypeId};
+use prefab::{Prefab, PrefabInstanceId};
 use render::{AREA_EDGE_EAST, AREA_EDGE_NORTH, AREA_EDGE_SOUTH, AREA_EDGE_WEST, SpriteInstance, SpriteTexture};
 
-use crate::{document::PrefabInstanceId, maploader::preview::MapView};
+use crate::maploader::preview::MapView;
 
 use super::{FrameInstances, instance_for, visual::Appearance};
 

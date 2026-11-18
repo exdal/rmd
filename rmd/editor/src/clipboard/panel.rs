@@ -1,4 +1,5 @@
-use dmm::{Coord, Size};
+use base::coord::Coord;
+use dmm::Size;
 
 pub(crate) fn centered_paste_min(width: u32, height: u32, anchor: Coord, map_size: Size) -> Coord {
     let place = |anchor: u32, extent: u32, limit: u32| {
@@ -17,7 +18,8 @@ pub(crate) fn centered_paste_min(width: u32, height: u32, anchor: Coord, map_siz
 
 #[cfg(test)]
 mod tests {
-    use dmm::{Coord, Size};
+    use base::coord::Coord;
+    use dmm::Size;
 
     use super::centered_paste_min;
 

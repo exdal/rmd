@@ -3,14 +3,13 @@ use std::collections::HashMap;
 use objtree::ObjectTree;
 use render::texture::TextureCatalog;
 
+use prefab::PrefabInstanceId;
+
 use super::{
     FrameInstances, FrameRenderOptions, PrefabUpdate, TypeVisibility, build_view_with_options,
     update_view_prefabs_with_options,
 };
-use crate::{
-    document::{MapDocument, PrefabInstanceId},
-    environment::world::Perspective,
-};
+use crate::{document::MapDocument, environment::world::Perspective};
 
 pub(crate) fn build(
     tree: &ObjectTree, textures: &TextureCatalog, document: &MapDocument, tile_size: u32,

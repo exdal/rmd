@@ -1,23 +1,35 @@
-use base::path::TreePath;
+use base::{coord::Coord, path::TreePath};
 use std::{
     collections::{HashMap, HashSet},
     mem,
     sync::Arc,
 };
 
-use dmm::{Coord, Map, MapFormat, Prefab, PrefabInstanceId, Size, Tile, key::Key, merge::tiles_equal};
+use dmm::{Map, MapFormat, Size, Tile, key::Key, tiles_equal};
+use prefab::{Prefab, PrefabId, PrefabInstance, PrefabInstanceId, PrefabLocation, table::PrefabTable};
 
-use crate::document::{instance::PlacedPrefab, instance::PrefabInstance, instance::PrefabLocation};
+use crate::document::instance::PlacedPrefab;
 
-#[derive(Debug, Clone, PartialEq)]
+pub use view::TileView;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct SharedTile(*const [PrefabId]);
+
+#[derive(Debug, Clone)]
 struct Cell {
+    prefabs: Arc<[PrefabId]>,
+    ids: Vec<PrefabInstanceId>,
+}
+
+#[derive(Debug, Clone)]
+struct LevelCell {
     tile: Arc<Tile>,
     ids: Vec<PrefabInstanceId>,
 }
 
 #[derive(Debug, Clone)]
 pub struct LevelCells {
-    cells: Vec<Cell>,
+    cells: Vec<LevelCell>,
 }
 
 impl LevelCells {
@@ -46,41 +58,54 @@ pub struct Grid {
     cells: Vec<Cell>,
     locations: HashMap<PrefabInstanceId, PrefabLocation>,
     next_id: u64,
+    table: PrefabTable,
 }
 
+// ids from two tables aren't comparable, so cells compare by contents
 impl PartialEq for Grid {
     fn eq(&self, other: &Self) -> bool {
-        self.size == other.size && self.cells == other.cells
+        self.size == other.size
+            && self.cells.len() == other.cells.len()
+            && self
+                .cells
+                .iter()
+                .zip(&other.cells)
+                .all(|(left, right)| left.ids == right.ids && self.view(left) == other.view(right))
     }
 }
 
 impl Grid {
     pub fn from_map(map: &Map) -> Self {
-        let shared = map
-            .dictionary
-            .iter()
-            .map(|(key, tile)| (*key, Arc::new(tile.clone())))
-            .collect::<HashMap<_, _>>();
-        let empty = Arc::new(Tile::new());
         let mut grid = Self {
             size: map.size,
             cells: Vec::with_capacity(cell_count(map.size)),
             locations: HashMap::new(),
             next_id: 1,
+            table: PrefabTable::default(),
         };
+
+        // sorted, so of prefabs spelled differently the lowest key's spelling is the one kept
+        let mut keys = map.dictionary.keys().copied().collect::<Vec<_>>();
+        keys.sort_unstable();
+        let shared = keys
+            .into_iter()
+            .map(|key| (key, grid.intern(&map.dictionary[&key])))
+            .collect::<HashMap<_, _>>();
+        let empty = Arc::<[PrefabId]>::from([]);
 
         for z in 1..=map.size.z {
             for y in 1..=map.size.y {
                 for x in 1..=map.size.x {
                     let coord = Coord::new(x, y, z);
-                    let tile = map.key_at(coord).and_then(|key| shared.get(&key)).unwrap_or(&empty);
-                    let ids = (0..tile.len()).map(|_| grid.allocate()).collect::<Vec<_>>();
+                    let prefabs = map.key_at(coord).and_then(|key| shared.get(&key)).unwrap_or(&empty);
+                    let ids = (0..prefabs.len()).map(|_| grid.allocate()).collect::<Vec<_>>();
                     for (prefab_index, id) in ids.iter().enumerate() {
                         grid.locations.insert(*id, PrefabLocation { coord, prefab_index });
                     }
 
+                    grid.place_all(prefabs);
                     grid.cells.push(Cell {
-                        tile: Arc::clone(tile),
+                        prefabs: Arc::clone(prefabs),
                         ids,
                     });
                 }
@@ -94,12 +119,14 @@ impl Grid {
         self.size
     }
 
-    pub fn tile_at(&self, coord: Coord) -> Option<&Tile> {
-        Some(&self.cell(coord)?.tile)
+    pub fn tile_at(&self, coord: Coord) -> Option<TileView<'_>> {
+        Some(self.view(self.cell(coord)?))
     }
 
-    pub(crate) fn shared_tile_at(&self, coord: Coord) -> Option<&Arc<Tile>> {
-        Some(&self.cell(coord)?.tile)
+    pub(crate) fn shared_tile_at(&self, coord: Coord) -> Option<(SharedTile, TileView<'_>)> {
+        let cell = self.cell(coord)?;
+
+        Some((SharedTile(Arc::as_ptr(&cell.prefabs)), self.view(cell)))
     }
 
     pub fn ids_at(&self, coord: Coord) -> &[PrefabInstanceId] {
@@ -125,8 +152,29 @@ impl Grid {
         })
     }
 
+    pub(crate) fn pin(&mut self, prefab: &Prefab) {
+        let id = self.table.intern(prefab);
+        self.table.pin(id);
+    }
+
+    pub(crate) fn is_placed(&self, prefab: &Prefab) -> bool {
+        self.table.find(prefab).is_some_and(|id| self.table.placed(id) > 0)
+    }
+
+    pub fn prefabs_of<'a>(&'a self, path: &'a TreePath) -> impl Iterator<Item = &'a Prefab> + 'a {
+        self.table.live().filter(move |prefab| prefab.path == *path)
+    }
+
     pub fn identical(&self, prefab: &Prefab) -> Vec<PrefabInstanceId> {
-        let mut matching = HashMap::<*const Tile, Vec<usize>>::new();
+        let Some(wanted) = self.table.find(prefab) else {
+            return Vec::new();
+        };
+
+        if self.table.placed(wanted) == 0 {
+            return Vec::new();
+        }
+
+        let mut matching = HashMap::<*const [PrefabId], Vec<usize>>::new();
         let mut found = Vec::new();
 
         for z in 1..=self.size.z {
@@ -136,11 +184,11 @@ impl Grid {
                         continue;
                     };
 
-                    let indices = matching.entry(Arc::as_ptr(&cell.tile)).or_insert_with(|| {
-                        cell.tile
+                    let indices = matching.entry(Arc::as_ptr(&cell.prefabs)).or_insert_with(|| {
+                        cell.prefabs
                             .iter()
                             .enumerate()
-                            .filter(|(_, placed)| *placed == prefab)
+                            .filter(|(_, id)| **id == wanted)
                             .map(|(index, _)| index)
                             .collect()
                     });
@@ -169,7 +217,8 @@ impl Grid {
             self.locations.remove(&id);
         }
 
-        cell.tile = Arc::default();
+        let prefabs = mem::replace(&mut cell.prefabs, Arc::from([]));
+        self.unplace_all(&prefabs);
     }
 
     pub(crate) fn place(&mut self, coord: Coord, placed: &[PlacedPrefab]) {
@@ -193,18 +242,18 @@ impl Grid {
             );
         }
 
-        let tile = self
-            .equal_neighbor(coord, placed)
-            .unwrap_or_else(|| Arc::new(placed.iter().map(|placed| placed.prefab().clone()).collect()));
+        let prefabs = self.intern(placed.iter().map(PlacedPrefab::prefab));
+        self.place_all(&prefabs);
+        let prefabs = self.equal_neighbor(coord, &prefabs).unwrap_or(prefabs);
         let cell = &mut self.cells[index];
         cell.ids = placed.iter().map(PlacedPrefab::id).collect();
-        cell.tile = tile;
+        cell.prefabs = prefabs;
     }
 
     /// this is an oppurtunistic dedup op, pretty easy and cheap way to compact tiles together to avoid memory
     /// explosions. Most of the maps are made out of empty spaces, we compare origin tile with its origins and return a
     /// clone of matched neigbors Arc
-    fn equal_neighbor(&self, coord: Coord, placed: &[PlacedPrefab]) -> Option<Arc<Tile>> {
+    fn equal_neighbor(&self, coord: Coord, prefabs: &[PrefabId]) -> Option<Arc<[PrefabId]>> {
         [(-1, 0), (1, 0), (0, -1), (0, 1)]
             .into_iter()
             .filter_map(|(dx, dy)| {
@@ -216,15 +265,8 @@ impl Grid {
 
                 self.cell(neighbor)
             })
-            .find(|cell| {
-                cell.tile.len() == placed.len()
-                    && cell
-                        .tile
-                        .iter()
-                        .zip(placed)
-                        .all(|(prefab, placed)| prefab == placed.prefab())
-            })
-            .map(|cell| Arc::clone(&cell.tile))
+            .find(|cell| *cell.prefabs == *prefabs)
+            .map(|cell| Arc::clone(&cell.prefabs))
     }
 
     pub(crate) fn resize(&mut self, width: u32, height: u32) {
@@ -238,7 +280,7 @@ impl Grid {
             z: self.size.z,
         };
         let empty = Cell {
-            tile: Arc::default(),
+            prefabs: Arc::from([]),
             ids: Vec::new(),
         };
         let mut cells = vec![empty; cell_count(size)];
@@ -256,6 +298,8 @@ impl Grid {
                     for id in cell.ids {
                         self.locations.remove(&id);
                     }
+
+                    self.unplace_all(&cell.prefabs);
                 },
             }
         }
@@ -268,7 +312,7 @@ impl Grid {
     pub(crate) fn filled_level(&mut self, tile: &[Prefab]) -> LevelCells {
         let shared = Arc::new(tile.to_vec());
         let cells = (0..cell_count(Size { z: 1, ..self.size }))
-            .map(|_| Cell {
+            .map(|_| LevelCell {
                 tile: Arc::clone(&shared),
                 ids: tile.iter().map(|_| self.allocate()).collect(),
             })
@@ -279,19 +323,20 @@ impl Grid {
 
     // equal tiles side by side share one, like `equal_neighbor` does
     pub(crate) fn level_from_tiles(&mut self, tiles: Vec<Tile>) -> LevelCells {
-        let mut cells = Vec::<Cell>::with_capacity(tiles.len());
+        let mut cells = Vec::<LevelCell>::with_capacity(tiles.len());
         for tile in tiles {
             let tile = match cells.last() {
                 Some(previous) if *previous.tile == tile => Arc::clone(&previous.tile),
                 _ => Arc::new(tile),
             };
             let ids = tile.iter().map(|_| self.allocate()).collect();
-            cells.push(Cell { tile, ids });
+            cells.push(LevelCell { tile, ids });
         }
 
         LevelCells { cells }
     }
 
+    // cells that shared prefabs share one tile, so `LevelCells::fill` still sees a filled level
     pub(crate) fn level(&self, z: u32) -> Option<LevelCells> {
         if z == 0 || z > self.size.z {
             return None;
@@ -299,10 +344,20 @@ impl Grid {
 
         let plane = cell_count(Size { z: 1, ..self.size });
         let start = (z as usize - 1) * plane;
+        let mut tiles = HashMap::<*const [PrefabId], Arc<Tile>>::new();
+        let cells = self.cells[start..start + plane]
+            .iter()
+            .map(|cell| LevelCell {
+                tile: Arc::clone(
+                    tiles
+                        .entry(Arc::as_ptr(&cell.prefabs))
+                        .or_insert_with(|| Arc::new(self.view(cell).to_tile())),
+                ),
+                ids: cell.ids.clone(),
+            })
+            .collect();
 
-        Some(LevelCells {
-            cells: self.cells[start..start + plane].to_vec(),
-        })
+        Some(LevelCells { cells })
     }
 
     pub(crate) fn insert_level(&mut self, z: u32, level: &LevelCells) -> bool {
@@ -323,10 +378,27 @@ impl Grid {
             return false;
         }
 
+        let mut interned = HashMap::<*const Tile, Arc<[PrefabId]>>::new();
+        let mut cells = Vec::with_capacity(level.cells.len());
+        for cell in &level.cells {
+            let prefabs = match interned.get(&Arc::as_ptr(&cell.tile)) {
+                Some(prefabs) => Arc::clone(prefabs),
+                None => {
+                    let prefabs = self.intern(cell.tile.iter());
+                    interned.insert(Arc::as_ptr(&cell.tile), Arc::clone(&prefabs));
+                    prefabs
+                },
+            };
+            self.place_all(&prefabs);
+            cells.push(Cell {
+                prefabs,
+                ids: cell.ids.clone(),
+            });
+        }
+
         let start_offset = (z as usize - 1) * plane;
         // construct cells to start offset, this also pushes higher offsets upwards
-        self.cells
-            .splice(start_offset..start_offset, level.cells.iter().cloned());
+        self.cells.splice(start_offset..start_offset, cells);
         self.size.z = levels;
 
         // we treat z levels as a stack and if we insert one in between, push the levels up
@@ -351,10 +423,12 @@ impl Grid {
 
         let plane = cell_count(Size { z: 1, ..self.size });
         let start = (z as usize - 1) * plane;
-        for cell in self.cells.drain(start..start + plane) {
+        for cell in self.cells.drain(start..start + plane).collect::<Vec<_>>() {
             for id in cell.ids {
                 self.locations.remove(&id);
             }
+
+            self.unplace_all(&cell.prefabs);
         }
 
         self.size.z -= 1;
@@ -376,13 +450,13 @@ impl Grid {
         // sorted, so of several keys holding equal tiles the lowest is always the one reused
         let mut keys = baseline.dictionary.keys().copied().collect::<Vec<_>>();
         keys.sort_unstable();
-        let mut known = HashMap::<Vec<&TreePath>, Vec<(Key, &Tile)>>::new();
+        let mut known = HashMap::<Vec<&TreePath>, Vec<(Key, TileView<'_>)>>::new();
         for key in keys {
-            let tile = &baseline.dictionary[&key];
+            let tile = TileView::from(&baseline.dictionary[&key]);
             known.entry(paths(tile)).or_default().push((key, tile));
         }
 
-        let mut resolved = HashMap::<(*const Tile, Option<Key>), Key>::new();
+        let mut resolved = HashMap::<(*const [PrefabId], Option<Key>), Key>::new();
         let mut cursor = 0;
 
         for z in 1..=size.z {
@@ -394,37 +468,39 @@ impl Grid {
                     };
 
                     let previous = baseline.key_at(coord);
-                    let key = *resolved.entry((Arc::as_ptr(&cell.tile), previous)).or_insert_with(|| {
-                        let tile = cell.tile.as_ref();
-                        let unchanged = previous.and_then(|key| {
-                            let before = baseline.dictionary.get(&key)?;
+                    let key = *resolved
+                        .entry((Arc::as_ptr(&cell.prefabs), previous))
+                        .or_insert_with(|| {
+                            let tile = self.view(cell);
+                            let unchanged = previous.and_then(|key| {
+                                let before = TileView::from(baseline.dictionary.get(&key)?);
 
-                            tiles_equal(before, tile).then_some((key, before))
+                                tiles_equal(before, tile).then_some((key, before))
+                            });
+                            let existing = unchanged.or_else(|| {
+                                known
+                                    .get(&paths(tile))?
+                                    .iter()
+                                    .find(|(_, candidate)| tiles_equal(*candidate, tile))
+                                    .copied()
+                            });
+
+                            let (key, contents) = existing.unwrap_or_else(|| {
+                                while baseline.dictionary.contains_key(&Key(cursor))
+                                    || map.dictionary.contains_key(&Key(cursor))
+                                {
+                                    cursor += 1;
+                                }
+
+                                let key = Key(cursor);
+                                known.entry(paths(tile)).or_default().push((key, tile));
+
+                                (key, tile)
+                            });
+                            map.dictionary.entry(key).or_insert_with(|| contents.to_tile());
+
+                            key
                         });
-                        let existing = unchanged.or_else(|| {
-                            known
-                                .get(&paths(tile))?
-                                .iter()
-                                .find(|(_, candidate)| tiles_equal(candidate, tile))
-                                .copied()
-                        });
-
-                        let (key, contents) = existing.unwrap_or_else(|| {
-                            while baseline.dictionary.contains_key(&Key(cursor))
-                                || map.dictionary.contains_key(&Key(cursor))
-                            {
-                                cursor += 1;
-                            }
-
-                            let key = Key(cursor);
-                            known.entry(paths(tile)).or_default().push((key, tile));
-
-                            (key, tile)
-                        });
-                        map.dictionary.entry(key).or_insert_with(|| contents.clone());
-
-                        key
-                    });
 
                     map.grid[(z - 1) as usize][(size.y - y) as usize][(x - 1) as usize] = key;
                 }
@@ -435,6 +511,44 @@ impl Grid {
         map.reassign_overflowing_keys();
 
         map
+    }
+
+    #[cfg(test)]
+    pub(crate) fn assert_placement_counts(&self) {
+        let mut counted = HashMap::<PrefabId, u32>::new();
+        for id in self.cells.iter().flat_map(|cell| cell.prefabs.iter()) {
+            *counted.entry(*id).or_default() += 1;
+        }
+
+        for (id, count) in &counted {
+            assert_eq!(self.table.placed(*id), *count, "{:?}", self.table.get(*id));
+        }
+
+        assert_eq!(
+            self.table.placed_entries(),
+            counted.len(),
+            "a prefab no cell holds counts as placed"
+        );
+    }
+
+    fn intern<'a>(&mut self, prefabs: impl IntoIterator<Item = &'a Prefab>) -> Arc<[PrefabId]> {
+        prefabs.into_iter().map(|prefab| self.table.intern(prefab)).collect()
+    }
+
+    fn place_all(&mut self, prefabs: &[PrefabId]) {
+        for id in prefabs {
+            self.table.place(*id);
+        }
+    }
+
+    fn unplace_all(&mut self, prefabs: &[PrefabId]) {
+        for id in prefabs {
+            self.table.unplace(*id);
+        }
+    }
+
+    fn view<'a>(&'a self, cell: &'a Cell) -> TileView<'a> {
+        TileView::interned(&self.table, &cell.prefabs)
     }
 
     fn index(&self, coord: Coord) -> Option<usize> {
@@ -462,9 +576,11 @@ fn index_in(size: Size, coord: Coord) -> Option<usize> {
     Some((z * size.y as usize + y) * size.x as usize + x)
 }
 
-fn paths(tile: &Tile) -> Vec<&TreePath> {
+fn paths(tile: TileView<'_>) -> Vec<&TreePath> {
     tile.iter().map(|prefab| &prefab.path).collect()
 }
+
+mod view;
 
 #[cfg(test)]
 mod tests;

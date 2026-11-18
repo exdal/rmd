@@ -1,4 +1,4 @@
-use dmm::PrefabInstanceId;
+use prefab::PrefabInstanceId;
 
 use crate::{Camera, MapViewFrame, MapViewRect, SpriteInstance, SpriteLighting, SpriteTexture};
 

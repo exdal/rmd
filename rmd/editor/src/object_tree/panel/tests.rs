@@ -1,11 +1,13 @@
 use base::{
+    coord::Coord,
     location::Location,
     path::TreePath,
     types::{Identifier, Value, VarModifiers},
 };
 
-use dmm::{Coord, Map, Prefab, Size};
+use dmm::{Map, Size};
 use objtree::VarDecl;
+use prefab::Prefab;
 use ui::testing::CONTEXT_LOCK;
 
 use super::{

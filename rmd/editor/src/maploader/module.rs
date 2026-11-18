@@ -1,4 +1,4 @@
-use base::file_path;
+use base::{coord::Coord, file_path};
 use std::{
     collections::HashMap,
     fs,
@@ -6,8 +6,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use dmm::{Coord, Map, Prefab, PrefabInstanceId};
+use dmm::Map;
 use objtree::{ObjectTree, TypeId};
+use prefab::{Prefab, PrefabInstanceId};
 use vm::{Fault, bake::ModuleRoot, world::Position};
 
 use crate::{

@@ -11,7 +11,10 @@ pub(crate) mod selection;
 pub(crate) mod session;
 pub(crate) mod state;
 
-use base::types::{Identifier, Value};
+use base::{
+    coord::Coord,
+    types::{Identifier, Value},
+};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashSet},
@@ -24,9 +27,9 @@ use std::{
     },
 };
 
-pub use dmm::PrefabInstanceId;
-use dmm::{Coord, Map, MapFormat, Prefab, writer};
+use dmm::{Map, MapFormat, writer};
 use objtree::ObjectTree;
+use prefab::{Prefab, PrefabInstance, PrefabInstanceId, PrefabLocation};
 
 use crate::{
     environment::world::World,
@@ -40,7 +43,7 @@ use crate::{
 
 use command::{Edit, EditGroupId, History, LevelEdit, SelectionChange};
 use grid::Grid;
-use instance::{InstanceChange, PlacedPrefab, PlacedTile, PrefabInstance, PrefabLocation, VarMutation};
+use instance::{InstanceChange, PlacedPrefab, PlacedTile, VarMutation};
 use journal::Journal;
 use selection::Selection;
 
