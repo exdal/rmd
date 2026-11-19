@@ -20,6 +20,7 @@ use crate::{
 pub struct RootSpecs {
     pub atoms: HashMap<PrefabInstanceId, Result<ModuleRoot, String>>,
     pub coords: HashMap<Coord, Result<ModuleRoot, String>>,
+    pub generated: Option<ModuleRoot>,
 }
 
 pub type Anchor = (Coord, Option<usize>);
@@ -27,7 +28,7 @@ pub type Anchor = (Coord, Option<usize>);
 pub fn root_specs<'a>(
     modules: impl Iterator<Item = (u64, &'a ModuleRoot)>, faults: impl Iterator<Item = (u64, &'a Fault)>,
     errors: impl Iterator<Item = (u64, &'a str)>,
-    coordinates: impl Iterator<Item = (Position, Result<&'a ModuleRoot, &'a str>)>,
+    coordinates: impl Iterator<Item = (Position, Result<&'a ModuleRoot, &'a str>)>, generated: Option<&ModuleRoot>,
 ) -> RootSpecs {
     let modules = modules.filter_map(|(id, root)| Some((PrefabInstanceId::from_raw(id)?, Ok(root.clone()))));
     let faults = faults.filter_map(|(id, fault)| Some((PrefabInstanceId::from_raw(id)?, Err(fault.to_string()))));
@@ -49,6 +50,7 @@ pub fn root_specs<'a>(
     RootSpecs {
         atoms: modules.chain(faults).chain(errors).collect(),
         coords,
+        generated: generated.cloned(),
     }
 }
 

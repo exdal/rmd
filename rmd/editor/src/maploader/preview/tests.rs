@@ -136,6 +136,7 @@ fn specs(entries: &[(PrefabInstanceId, ModuleRoot)]) -> RootSpecs {
     RootSpecs {
         atoms: entries.iter().map(|(id, root)| (*id, Ok(root.clone()))).collect(),
         coords: Default::default(),
+        generated: None,
     }
 }
 
@@ -901,6 +902,7 @@ fn root_specs_collects_modules_faults_and_errors_and_skips_invalid_ids() {
             (Position { x: -1, y: 4, z: 1 }, Ok(&spec)),
         ]
         .into_iter(),
+        None,
     );
 
     assert_eq!(collected.atoms.len(), 3);
@@ -1115,6 +1117,7 @@ fn coordinate_specs(entries: &[(Coord, ModuleRoot)]) -> RootSpecs {
     RootSpecs {
         atoms: Default::default(),
         coords: entries.iter().map(|(coord, root)| (*coord, Ok(root.clone()))).collect(),
+        generated: None,
     }
 }
 
@@ -1173,6 +1176,7 @@ fn a_coordinate_error_spec_keeps_a_diagnostic_and_no_layer() {
     let specs = RootSpecs {
         atoms: Default::default(),
         coords: [(at, Err("no room".to_string()))].into_iter().collect(),
+        generated: None,
     };
     let preview = fixture.compose(&source, &specs);
 
@@ -1209,6 +1213,7 @@ fn a_coordinate_module_wins_turf_and_area_over_an_atom_module() {
             .into_iter()
             .collect(),
         coords: [(cell, Ok(fixture.spec(&["coordinate.dmm"])))].into_iter().collect(),
+        generated: None,
     };
     let preview = fixture.compose(&source, &specs);
 
@@ -1291,5 +1296,139 @@ fn choosing_a_variant_on_a_coordinate_root_recomposes_it() {
     assert_eq!(
         state.choices.get(&key).map(|choice| choice.path.clone()),
         Some(resolve_module_path(&fixture.directory, "two.dmm").unwrap())
+    );
+}
+
+fn generated_specs(map: &Arc<Map>) -> RootSpecs {
+    RootSpecs {
+        generated: Some(ModuleRoot {
+            source: ModuleSource::Generated(Arc::clone(map)),
+            anchor: None,
+            skip: Vec::new(),
+            offset: [0; 3],
+        }),
+        ..Default::default()
+    }
+}
+
+fn generated_map(second: &str) -> Arc<Map> {
+    let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
+    map.intern_tile(Vec::new());
+    for (x, paths) in [(1, ["/obj/leaf", "/turf/wall"]), (3, [second, "/turf/floor"])] {
+        let key = map.intern_tile(paths.iter().map(|path| prefab(path)).collect());
+        map.grid[0][0][x - 1] = key;
+    }
+
+    Arc::new(map)
+}
+
+#[test]
+fn a_generated_turf_replaces_the_source_turf_and_keeps_its_movables_and_area() {
+    let fixture = Fixture::new();
+    let first = Coord::new(1, 1, 1);
+    let source = Grid::from_map(&map([3, 1, 1], &[(first, "/obj/sign")]));
+    let generated = generated_map("/obj/leaf");
+    let preview = fixture.compose(&source, &generated_specs(&generated));
+
+    assert_eq!(preview.roots.len(), 1);
+    let root = &preview.roots[0];
+    assert_eq!(root.key.origin, ModuleOrigin::Generated);
+    assert!(root.marker.is_none());
+    assert_eq!(root.selected, Some(0));
+    assert!(preview.diagnostics.is_empty());
+
+    let view = preview.view(&source);
+    assert_eq!(
+        paths(view, first),
+        ["/area/test", "/obj/sign", "/obj/leaf", "/turf/wall"]
+    );
+    assert_eq!(
+        paths(view, Coord::new(3, 1, 1)),
+        ["/area/test", "/obj/leaf", "/turf/floor"]
+    );
+    assert_eq!(view.tile_at(Coord::new(2, 1, 1)), source.tile_at(Coord::new(2, 1, 1)));
+    assert!(!preview.covered.contains(&Coord::new(2, 1, 1)));
+
+    let at_coordinate = fixture.compose(
+        &source,
+        &RootSpecs {
+            coords: [(
+                first,
+                Ok(ModuleRoot {
+                    source: ModuleSource::Generated(Arc::clone(&generated)),
+                    anchor: None,
+                    skip: Vec::new(),
+                    offset: [0; 3],
+                }),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        paths(at_coordinate.view(&source), first),
+        ["/area/test", "/obj/leaf", "/turf/wall"]
+    );
+}
+
+#[test]
+fn recomposing_the_same_generated_map_reuses_the_layer_and_a_new_one_changes_its_ids() {
+    let fixture = Fixture::new();
+    let source = Grid::from_map(&map([3, 1, 1], &[]));
+    let mut files = ModuleFiles::default();
+    let mut ids = PreviewIdAllocator::default();
+    let ctx = fixture.ctx(&source);
+    let generated = generated_map("/obj/leaf");
+    let specs = generated_specs(&generated);
+
+    let first = update(
+        ctx,
+        &specs,
+        &mut files,
+        &Default::default(),
+        &mut ids,
+        None,
+        &HashSet::new(),
+    );
+    let same = update(
+        ctx,
+        &specs,
+        &mut files,
+        &first.choices,
+        &mut ids,
+        Some(&first),
+        &HashSet::new(),
+    );
+    assert!(Arc::ptr_eq(&first.layers[0], &same.layers[0]));
+    assert!(ModuleOverlay::changes(&source, Some(&first), Some(&same)).is_empty());
+    assert_eq!(
+        first.view(&source).ids_at(Coord::new(1, 1, 1)),
+        same.view(&source).ids_at(Coord::new(1, 1, 1))
+    );
+
+    let replaced = generated_map("/obj/tree");
+    let next = update(
+        ctx,
+        &generated_specs(&replaced),
+        &mut files,
+        &same.choices,
+        &mut ids,
+        Some(&same),
+        &HashSet::new(),
+    );
+    assert!(!Arc::ptr_eq(&same.layers[0], &next.layers[0]));
+    assert_eq!(paths(next.view(&source), Coord::new(3, 1, 1))[1], "/obj/tree");
+
+    let changed = ModuleOverlay::changes(&source, Some(&same), Some(&next));
+    let third = Coord::new(3, 1, 1);
+    let mut affected = same.view(&source).ids_at(third).to_vec();
+    affected.extend(next.view(&source).ids_at(third));
+    assert!(!changed.is_empty());
+    assert!(changed.iter().all(|id| affected.contains(id)));
+    assert!(
+        !changed
+            .iter()
+            .any(|id| same.view(&source).ids_at(Coord::new(1, 1, 1)).contains(id))
     );
 }

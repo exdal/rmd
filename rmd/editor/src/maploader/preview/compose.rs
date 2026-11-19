@@ -123,6 +123,18 @@ pub(super) fn update(
         );
     }
 
+    if let Some(generated) = &specs.generated {
+        composer.root(
+            ModuleRootKey {
+                origin: ModuleOrigin::Generated,
+                ancestry: Vec::new(),
+            },
+            Coord::new(1, 1, 1),
+            None,
+            &Ok(generated.clone()),
+        );
+    }
+
     let mut preview = composer.preview;
     let mut dirty = dirty_source.clone();
     // If roots were reordered, their overlap order may have changed.
