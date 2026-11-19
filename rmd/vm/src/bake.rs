@@ -12,10 +12,13 @@ use std::{
 };
 
 use codegen::Module;
+use dmm::{Map, Size, key::Key};
 use objtree::{ObjectTree, TypeId};
+use prefab::Prefab;
 
 use crate::{
     AppearanceDelta, AppearanceLighting, Diagnostics, Fault, FaultKind, GenericValue, IconStates, Limits, Runtime,
+    eval::Evaluator,
     heap::{Object, ObjectId},
     lighting::{LightSource, LightingAtom, direction_angle, parse_color},
     matrix,
@@ -90,9 +93,27 @@ struct Placed {
     constants: u64,
 }
 
+#[derive(Debug, Clone)]
+pub enum ModuleSource {
+    Files(Vec<String>),
+    Generated(Arc<Map>),
+}
+
+impl PartialEq for ModuleSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Files(left), Self::Files(right)) => left == right,
+            (Self::Generated(left), Self::Generated(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ModuleSource {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleRoot {
-    pub files: Vec<String>,
+    pub source: ModuleSource,
     pub anchor: Option<TypeId>,
     pub skip: Vec<TypeId>,
     pub offset: [i32; 3],
@@ -358,6 +379,7 @@ pub struct Bake {
     pub succeeded: usize,
     pub cache_hits: usize,
     pub limits: Limits,
+    generated: Option<ModuleRoot>,
     atoms: HashMap<u64, Placed>,
     objects: HashMap<u64, ObjectId>,
     cells: HashMap<Position, Vec<u64>>,
@@ -384,10 +406,32 @@ pub struct Bake {
     profile: ProfileDefinition,
 }
 
+// this should hopefully be enough for most of the codebases
+const GENERATE_INSTRUCTIONS_PER_TILE: u64 = 1 << 11;
+const GENERATE_ALLOCATIONS_PER_TILE: usize = 1 << 6;
+
+fn generate_limits(limits: Limits, size: [i32; 3]) -> Limits {
+    let tiles = size
+        .iter()
+        .map(|axis| axis.max(&0).unsigned_abs() as u64)
+        .product::<u64>();
+
+    Limits {
+        instruction_budget: limits
+            .instruction_budget
+            .max(GENERATE_INSTRUCTIONS_PER_TILE.saturating_mul(tiles)),
+        allocations: limits
+            .allocations
+            .max(GENERATE_ALLOCATIONS_PER_TILE.saturating_mul(usize::try_from(tiles).unwrap_or(usize::MAX))),
+        ..limits
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     Instantiate,
     Initialize,
+    Generate,
     Prepare,
     Connections,
     Highlights,
@@ -418,6 +462,10 @@ impl PendingBake<'_> {
         self.bake.module_errors()
     }
 
+    pub fn generated(&self) -> Option<&ModuleRoot> {
+        self.bake.generated()
+    }
+
     pub fn coordinate_modules(&self) -> impl Iterator<Item = (Position, Result<&ModuleRoot, &str>)> {
         self.bake.coordinate_modules()
     }
@@ -427,6 +475,33 @@ impl PendingBake<'_> {
     ) {
         self.bake
             .replace_atoms(self.tree, self.module, replacements, removed, progress);
+    }
+
+    pub fn generate(&mut self, mut progress: impl FnMut(Stage, usize, usize)) {
+        let bake = &mut self.bake;
+        let Some(task) = bake
+            .profile
+            .procedure(ProfileHook::Generate)
+            .filter(|_| bake.initialized)
+        else {
+            return;
+        };
+
+        progress(Stage::Generate, 0, 1);
+        let limits = generate_limits(bake.limits, bake.runtime.world.size);
+        match bake.runtime.generate(self.tree, self.module, task, limits) {
+            Ok(generated) => {
+                bake.generated = generated.map(|map| ModuleRoot {
+                    source: ModuleSource::Generated(map),
+                    anchor: None,
+                    skip: Vec::new(),
+                    offset: [0, 0, 0],
+                });
+            },
+            Err(fault) => bake.diagnostics.record(fault),
+        }
+
+        progress(Stage::Generate, 1, 1);
     }
 
     pub fn finish_with_progress(mut self, progress: impl FnMut(Stage, usize, usize)) -> Bake {
@@ -529,6 +604,10 @@ impl Bake {
 
             (*position, module)
         })
+    }
+
+    pub fn generated(&self) -> Option<&ModuleRoot> {
+        self.generated.as_ref()
     }
 
     pub fn with_progress(
@@ -1894,11 +1973,10 @@ fn field_number(fields: &[(GenericValue, Option<GenericValue>)], name: &str, def
 }
 
 pub(crate) fn placement_entry(
-    evaluator: &mut crate::eval::Evaluator<'_>, value: GenericValue,
+    evaluator: &mut Evaluator<'_>, value: GenericValue,
 ) -> Result<(PlacementTarget, Placement), Fault> {
-    let invalid = |evaluator: &crate::eval::Evaluator<'_>, message: &str| {
-        evaluator.fault(FaultKind::InvalidOperation(message.into()))
-    };
+    let invalid =
+        |evaluator: &Evaluator<'_>, message: &str| evaluator.fault(FaultKind::InvalidOperation(message.into()));
 
     let GenericValue::List(list) = value else {
         return Err(invalid(
@@ -2039,7 +2117,7 @@ pub(crate) fn placement_entry(
     Ok((
         target,
         Placement::Maps(ModuleRoot {
-            files,
+            source: ModuleSource::Files(files),
             anchor,
             skip,
             offset,
@@ -2047,7 +2125,7 @@ pub(crate) fn placement_entry(
     ))
 }
 
-fn coordinate(evaluator: &mut crate::eval::Evaluator<'_>, value: &GenericValue) -> Result<Position, Fault> {
+fn coordinate(evaluator: &mut Evaluator<'_>, value: &GenericValue) -> Result<Position, Fault> {
     let invalid = || {
         evaluator.fault(FaultKind::InvalidOperation(
             "demir_place_modular() at must be list(x, y, z)".into(),
@@ -2079,8 +2157,7 @@ fn coordinate(evaluator: &mut crate::eval::Evaluator<'_>, value: &GenericValue) 
 }
 
 fn highlight_from_fields(
-    evaluator: &mut crate::eval::Evaluator<'_>, fields: &[(GenericValue, Option<GenericValue>)], position: Position,
-    size: [i32; 3],
+    evaluator: &mut Evaluator<'_>, fields: &[(GenericValue, Option<GenericValue>)], position: Position, size: [i32; 3],
 ) -> Result<Option<Highlight>, Fault> {
     let mut offsets = Vec::new();
     if let Some(GenericValue::List(tiles)) = field(fields, "tiles") {
@@ -2192,7 +2269,7 @@ impl Runtime {
         let profile = self.profile;
         self.begin_journal();
         let result = (|| {
-            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
+            let mut evaluator = Evaluator::new(self, tree, module, limits, Some(object));
             let value = evaluator.call(proc, profile, vec![(None, GenericValue::Object(object))])?;
             let entries = match value {
                 GenericValue::Null => return Ok(Vec::new()),
@@ -2260,12 +2337,13 @@ impl Runtime {
         self.begin_journal();
         let result = {
             let argument = target.map_or(GenericValue::Null, GenericValue::Object);
-            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, target);
+            let mut evaluator = Evaluator::new(self, tree, module, limits, target);
             evaluator.call(proc, profile, vec![(None, argument)])
         };
 
-        let is_changed =
-            self.heap.changed() || !self.pending_placements.is_marked_empty() || self.ui.has_modular_preview_request();
+        let is_changed = self.heap.is_changed()
+            || !self.pending_placements.is_marked_empty()
+            || self.ui.has_modular_preview_request();
         let is_committed = interacted && result.is_ok() && is_changed;
         match is_committed {
             true => self.commit_journal(),
@@ -2292,7 +2370,7 @@ impl Runtime {
         let profile = self.profile;
         self.begin_journal();
         let result = (|| {
-            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
+            let mut evaluator = Evaluator::new(self, tree, module, limits, Some(object));
             let value = evaluator.call(proc, profile, vec![(None, GenericValue::Object(object))])?;
             let entries = match value {
                 GenericValue::Null => return Ok(Vec::new()),
@@ -2361,11 +2439,7 @@ impl Runtime {
             let entries = roots.iter().map(|root| (GenericValue::Object(*root), None)).collect();
             let list = self.heap.alloc_list(ListData::new(entries)).map_err(Fault::detached)?;
 
-            crate::eval::Evaluator::new(self, tree, module, limits, None).call(
-                task,
-                profile,
-                vec![(None, GenericValue::List(list))],
-            )
+            Evaluator::new(self, tree, module, limits, None).call(task, profile, vec![(None, GenericValue::List(list))])
         })();
         let state = std::mem::take(&mut self.placement);
         match &result {
@@ -2378,6 +2452,96 @@ impl Runtime {
             PlacementState::Task { entries, .. } => Ok(entries),
             PlacementState::Idle => Ok(HashMap::new()),
         }
+    }
+
+    fn generate(
+        &mut self, tree: &ObjectTree, module: &Module, task: ProcId, limits: Limits,
+    ) -> Result<Option<Arc<Map>>, Fault> {
+        self.ensure_global().map_err(|fault| fault.entering(module, task))?;
+
+        let profile = self.profile;
+        self.begin_journal();
+        let result = Evaluator::new(self, tree, module, limits, None)
+            .call(task, profile, Vec::new())
+            .map(|_| self.capture_generated(tree));
+        self.rollback_journal();
+
+        result
+    }
+
+    /// Placing a turf onto map one by one is pretty expensive. So we make use of journal.
+    /// Journal keeps track of created objects after `j.begin()`. We can get these using
+    /// `j.changed_objects()`. This allows us to batch the changes. Journal is pretty cool
+    /// and I love batching.
+    fn capture_generated(&self, tree: &ObjectTree) -> Option<Arc<Map>> {
+        let size = self.world.size;
+        let mut tiles = HashMap::<Position, (Vec<TypeId>, Option<TypeId>)>::new();
+
+        // easy part first, poll changed objects
+        for id in self.heap.changed_objects() {
+            let (Some(object), Some(before)) = (self.heap.object(id), self.heap.before_object(id)) else {
+                continue;
+            };
+
+            let Some(position) = object.position.filter(|position| self.world.contains(*position)) else {
+                continue;
+            };
+
+            if object.ty != before.ty {
+                tiles.entry(position).or_default().1 = Some(object.ty);
+            }
+        }
+
+        // poll created objects (turfs obviously can have multiple things on top in same position so we use vec tuple)
+        for (_, object) in self.heap.created_objects() {
+            let Some(parent) = object.loc.and_then(|loc| self.heap.object(loc)) else {
+                continue;
+            };
+
+            let is_turf = tree
+                .roots()
+                .turf
+                .is_some_and(|turf| tree.is_subtype_of(parent.ty, turf));
+            let Some(position) = parent
+                .position
+                .filter(|position| is_turf && self.world.contains(*position))
+            else {
+                continue;
+            };
+
+            tiles.entry(position).or_default().0.push(object.ty);
+        }
+
+        if tiles.is_empty() {
+            return None;
+        }
+
+        let mut map = Map::new(Size {
+            x: size[0] as u32,
+            y: size[1] as u32,
+            z: size[2] as u32,
+        });
+        let mut keys = HashMap::<Vec<TypeId>, Key>::new();
+        for (position, (mut types, turf)) in tiles {
+            types.extend(turf);
+
+            let next = Key(keys.len() as u32 + 1);
+            let key = *keys.entry(types).or_insert(next);
+            map.grid[position.z as usize - 1][(size[1] - position.y) as usize][position.x as usize - 1] = key;
+        }
+
+        for (types, key) in keys {
+            let tile = types
+                .into_iter()
+                .filter_map(|ty| tree.get(ty))
+                .map(|decl| Prefab::new(decl.path.clone()))
+                .collect();
+            map.dictionary.insert(key, tile);
+        }
+
+        map.key_length = Key::length_for(map.dictionary.len() + 1);
+
+        Some(Arc::new(map))
     }
 
     fn preview(
@@ -2398,7 +2562,7 @@ impl Runtime {
             )
         });
         let result = (|| {
-            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
+            let mut evaluator = Evaluator::new(self, tree, module, limits, Some(object));
             evaluator.call(proc, profile, vec![(None, GenericValue::Object(object))])?;
 
             let mut ids = evaluator.runtime.heap.changed_objects();

@@ -145,6 +145,12 @@
 	// root without an entry places nothing.
 	proc/process_modular_root(list/roots)
 
+	// Runs once per full bake after New() and the modular root pass. Code may create and replace atoms
+	// on the map (ie: `new /turf/foo()`. When it returns, the runtime collects every turf whose type it
+	// changed and every atom it created directly on a turf, and shows them as a read-only generated
+	// layer, by type only. It discards all heap writes, and placements made inside it are discarded.
+	proc/generate()
+
 // Return the active profile. An ordinary procedure can use it to read profile state. Return null
 // outside a bake.
 /proc/demir_profile()

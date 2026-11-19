@@ -224,7 +224,17 @@ impl Heap {
             .unwrap_or_default()
     }
 
-    pub fn changed(&self) -> bool {
+    pub fn created_objects(&self) -> impl Iterator<Item = (ObjectId, &Object)> {
+        let start = self.journal.as_ref().map_or(self.objects.len(), |j| j.objects_len);
+
+        self.objects[start..]
+            .iter()
+            .enumerate()
+            .filter(|(_, object)| !object.deleted)
+            .map(move |(index, object)| (ObjectId((start + index) as u32), object))
+    }
+
+    pub fn is_changed(&self) -> bool {
         self.journal.as_ref().is_some_and(|j| {
             !j.objects.is_empty()
                 || !j.lists.is_empty()
@@ -403,7 +413,7 @@ mod tests {
         *heap.static_value_mut(Static::Local(0)) = Some(GenericValue::Num(2.0));
         *heap.static_value_mut(Static::Var(SharedVarId(0))) = Some(GenericValue::Num(3.0));
 
-        assert!(heap.changed());
+        assert!(heap.is_changed());
         heap.rollback();
         assert_eq!(heap.static_value(Static::Local(0)), Some(&GenericValue::Num(1.0)));
         assert_eq!(heap.static_value(Static::Var(SharedVarId(0))), None);

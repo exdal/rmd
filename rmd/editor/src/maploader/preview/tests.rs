@@ -9,7 +9,11 @@ use std::{
 use dmm::{Map, Size};
 use objtree::{ObjectTree, TypeId};
 use prefab::PrefabInstanceId;
-use vm::{Fault, FaultKind, bake::ModuleRoot, world::Position};
+use vm::{
+    Fault, FaultKind,
+    bake::{ModuleRoot, ModuleSource},
+    world::Position,
+};
 
 use super::{
     ComposeContext, MapView, ModuleOrigin, ModuleOverlay, ModulePreviewState, ModuleRootKey, ModuleVariantKey,
@@ -56,7 +60,7 @@ impl Fixture {
 
     fn spec(&self, files: &[&str]) -> ModuleRoot {
         ModuleRoot {
-            files: files.iter().map(|file| (*file).to_owned()).collect(),
+            source: ModuleSource::Files(files.iter().map(|file| (*file).to_owned()).collect()),
             anchor: Some(self.ty(CONNECTOR)),
             skip: vec![self.ty("/turf/template_noop"), self.ty("/area/template_noop")],
             offset: [0; 3],
