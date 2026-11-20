@@ -17,6 +17,7 @@ pub struct Device {
     pub max_compute_work_group_count_x: u32,
     pub max_image_dimension_2d: u32,
     pub is_update_after_bind: bool,
+    pub adapter: AdapterInfo,
     graphics_family: u32,
     entry: ash::Entry,
 }
@@ -32,6 +33,7 @@ impl Device {
             max_compute_work_group_count_x,
             max_image_dimension_2d,
             is_update_after_bind,
+            adapter,
         } = select_physical_device(&instance)?;
         let device = create_device(&instance, physical_device, is_update_after_bind)?;
 
@@ -54,6 +56,7 @@ impl Device {
             max_compute_work_group_count_x,
             max_image_dimension_2d,
             is_update_after_bind,
+            adapter,
             graphics_family: graphics,
         })
     }
@@ -223,6 +226,12 @@ fn create_instance(entry: &ash::Entry, window: RawWindowHandle) -> Result<ash::I
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AdapterInfo {
+    pub name: String,
+    pub driver: String,
+}
+
 struct SelectedDevice {
     physical_device: vk::PhysicalDevice,
     queue_families: Vec<vk::QueueFamilyProperties>,
@@ -230,6 +239,7 @@ struct SelectedDevice {
     max_compute_work_group_count_x: u32,
     max_image_dimension_2d: u32,
     is_update_after_bind: bool,
+    adapter: AdapterInfo,
 }
 
 fn bindless_texture_limit(
@@ -327,6 +337,20 @@ fn check_device(
         return Err(shortfalls);
     }
 
+    let driver_name = vk12_properties
+        .driver_name_as_c_str()
+        .unwrap_or(c"unknown")
+        .to_string_lossy();
+    let driver_info = vk12_properties
+        .driver_info_as_c_str()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let driver = if driver_info.is_empty() {
+        driver_name.into_owned()
+    } else {
+        format!("{driver_name} {driver_info}")
+    };
+
     Ok(SelectedDevice {
         physical_device: handle,
         queue_families: families,
@@ -334,6 +358,10 @@ fn check_device(
         max_compute_work_group_count_x: limits.max_compute_work_group_count[0],
         max_image_dimension_2d: limits.max_image_dimension2_d,
         is_update_after_bind,
+        adapter: AdapterInfo {
+            name: device_name(properties),
+            driver,
+        },
     })
 }
 
@@ -370,7 +398,7 @@ fn select_physical_device(instance: &ash::Instance) -> Result<SelectedDevice, Gp
         .ok_or(GpuError::NoSuitableDevice(rejected))?;
     log::info!(
         "gpu: {} ({:?}, driver {:#x}), {} bindless textures, update after bind: {}",
-        device_name(&properties),
+        selected.adapter.name,
         properties.device_type,
         properties.driver_version,
         selected.max_bindless_textures,

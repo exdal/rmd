@@ -6,7 +6,10 @@ use ui::{
     widgets::{dpi, focus_window_on_hover},
 };
 
-use super::{CloseFocus, OpenRequest, SAVE_ERROR_COLOR, UiState};
+use super::{
+    CloseFocus, OpenRequest, SAVE_ERROR_COLOR, UiState,
+    about::{draw_app_title, draw_build_info},
+};
 use crate::coop::panel::shared_maps;
 use crate::{
     app::update::Release,
@@ -18,21 +21,11 @@ use crate::{
     settings::Settings,
 };
 
-const WELCOME_TITLE_SIZE: f32 = 40.0;
-
 const WELCOME_CONTENT_WIDTH: f32 = 640.0;
 
 const WELCOME_MIN_INDENT: f32 = 24.0;
 
 const WELCOME_MAP_PREVIEW: usize = 10;
-
-const BUILD_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
-
-const BUILD_GIT_SHORT_HASH: Option<&str> = option_env!("RMD_GIT_SHORT_HASH");
-
-const BUILD_VERSION_URL: Option<&str> = option_env!("RMD_VERSION_URL");
-
-const BUILD_COMMIT_URL: Option<&str> = option_env!("RMD_COMMIT_URL");
 
 const UPDATE_AVAILABLE_COLOR: [f32; 4] = [0.3, 0.68, 0.36, 1.0];
 
@@ -65,24 +58,7 @@ fn draw_welcome_subtitle(ui: &Ui, release: Option<&Release>) {
         ui.same_line();
     }
 
-    match BUILD_VERSION_URL {
-        Some(url) => {
-            ui.text_link_open_url(BUILD_VERSION, url);
-        },
-        None => ui.text_disabled(BUILD_VERSION),
-    }
-
-    ui.same_line();
-    ui.text_disabled("\u{2022}");
-    ui.same_line();
-
-    let hash = BUILD_GIT_SHORT_HASH.unwrap_or("unknown");
-    match (BUILD_GIT_SHORT_HASH, BUILD_COMMIT_URL) {
-        (Some(_), Some(url)) => {
-            ui.text_link_open_url(hash, url);
-        },
-        _ => ui.text_disabled(hash),
-    }
+    draw_build_info(ui);
 
     ui.same_line();
     ui.text_disabled("\u{2022}");
@@ -238,10 +214,7 @@ impl UiState {
 }
 
 fn draw_welcome_title(ui: &Ui, codebase: Option<&Path>, release: Option<&Release>) {
-    {
-        let _font = ui.push_font_with_size(None, WELCOME_TITLE_SIZE);
-        ui.text("Rapid Mapping Device");
-    }
+    draw_app_title(ui);
 
     match codebase {
         Some(codebase) => ui.text_disabled(codebase.display().to_string()),

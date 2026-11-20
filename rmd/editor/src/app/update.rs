@@ -6,9 +6,7 @@ use std::{
 
 use serde::Deserialize;
 
-const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-const REPOSITORY_URL: Option<&str> = option_env!("RMD_REPOSITORY_URL");
+use crate::build_info::{REPOSITORY_URL, VERSION};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -48,7 +46,7 @@ impl UpdateCheck {
 
         thread::spawn(move || {
             let release = match fetch_latest(&url) {
-                Ok(latest) => is_newer(&latest.tag_name, CURRENT_VERSION).then_some(Release {
+                Ok(latest) => is_newer(&latest.tag_name, VERSION).then_some(Release {
                     version: latest.tag_name,
                     url: latest.html_url,
                 }),
@@ -85,7 +83,7 @@ fn fetch_latest(url: &str) -> Result<GithubRelease, ureq::Error> {
 
     agent
         .get(url)
-        .header("User-Agent", concat!("rmd/", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", format!("rmd/{VERSION}"))
         .header("Accept", "application/vnd.github+json")
         .call()?
         .body_mut()

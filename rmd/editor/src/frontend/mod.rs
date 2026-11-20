@@ -10,7 +10,7 @@ use dear_imgui_rs::{
     DockLayout, DockLayoutApply, DockNodeFlags, DockSplit, DockspaceError, Id, Ui, WindowKey, WindowKeyError,
 };
 use prefab::PrefabInstanceId;
-use render::{Camera, GuideLine, MapViewInteraction, MapViewRect};
+use render::{AdapterInfo, Camera, GuideLine, MapViewInteraction, MapViewRect};
 use ui::theme::Themes;
 
 use crate::{
@@ -57,6 +57,7 @@ use crate::{
     },
 };
 
+mod about;
 mod actions;
 pub(crate) mod dialog;
 #[cfg(test)]
@@ -254,6 +255,7 @@ pub struct UiState {
     pub(crate) load_notice: Option<LoadNotice>,
     pub(crate) diagnostics: DiagnosticsState,
     pub(crate) keybind_preset_prompt: bool,
+    pub(crate) gpu: Option<AdapterInfo>,
     pub(crate) copy_to_clipboard: Option<String>,
     pub(crate) open_map: Option<PathBuf>,
     pub(crate) update_check: UpdateCheck,
@@ -337,6 +339,7 @@ impl UiState {
             load_notice: None,
             diagnostics: DiagnosticsState::default(),
             keybind_preset_prompt,
+            gpu: None,
             copy_to_clipboard: None,
             open_map: None,
             update_check: UpdateCheck::default(),
@@ -529,6 +532,8 @@ impl UiState {
 
         self.settings_window
             .finish_keybind_capture(ui, &mut settings.keybindings);
+
+        self.draw_about(ui, menu.show_about);
 
         let exit = self.draw_exit_confirmation(ui, session);
         self.popup_was_open = ui.is_popup_open_with_flags("", dear_imgui_rs::PopupQueryFlags::ANY_POPUP);
