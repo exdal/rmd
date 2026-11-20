@@ -1,9 +1,12 @@
 use dear_imgui_rs::Ui;
+use ui::icons::materialdesignicons::ICON_OPEN_IN_NEW;
 
 use super::{
     LAYER_KEYS, OpenRequest, SCREENSHOT_KEYS, ScreenshotArea, ScreenshotRequest, UiState, welcome::codebase_relative,
 };
 use crate::{
+    app::process,
+    build_info::REPOSITORY_URL,
     coop::{
         CoopStatus,
         panel::{CoopDialogKind, draw_coop_peers, draw_coop_status},
@@ -75,9 +78,7 @@ impl UiState {
                 draw_window_menu(ui, settings, &mut actions);
             });
             ui.menu("Help", || {
-                if ui.menu_item("About") {
-                    actions.show_about = true;
-                }
+                draw_help_menu(ui, &mut actions);
             });
 
             if let Some(coop) = session.coop() {
@@ -415,6 +416,24 @@ fn draw_view_menu(ui: &Ui, session: &mut Session, settings: &Settings, actions: 
         actions.toggle_mirror_camera = true;
     }
     ui.set_item_tooltip("Keep pan, zoom and Z level the same in every map view");
+}
+
+fn draw_help_menu(ui: &Ui, actions: &mut MenuActions) {
+    if ui.menu_item_enabled_selected_no_shortcut(
+        format!("Report issue {ICON_OPEN_IN_NEW}"),
+        false,
+        REPOSITORY_URL.is_some(),
+    ) && let Some(repository) = REPOSITORY_URL
+        && let Err(e) = process::open(format!("{repository}/issues/new"))
+    {
+        log::error!("could not open the issue tracker: {e}");
+    }
+
+    ui.separator();
+
+    if ui.menu_item("About") {
+        actions.show_about = true;
+    }
 }
 
 fn draw_window_menu(ui: &Ui, settings: &Settings, actions: &mut MenuActions) {

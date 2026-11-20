@@ -5,6 +5,7 @@ use ui::{
 };
 
 use crate::{
+    app::process,
     frontend::{ProfileReload, dialog::draw_keybind_preset_dialog},
     session::Session,
     settings::{
@@ -300,7 +301,7 @@ fn draw_general_settings(ui: &Ui, settings: &mut Settings) {
 fn show_backups() {
     let result = backup_dir().and_then(|dir| {
         std::fs::create_dir_all(&dir)?;
-        crate::app::process::open_directory(&dir)
+        process::open(&dir)
     });
     if let Err(error) = result {
         log::error!("could not open the backups folder: {error}");

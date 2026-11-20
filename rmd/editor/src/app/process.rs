@@ -1,4 +1,4 @@
-use std::{io, path::Path, process::Command};
+use std::{ffi::OsStr, io, process::Command};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -16,7 +16,7 @@ pub fn command(program: &str) -> Command {
     command
 }
 
-pub fn open_directory(path: &Path) -> io::Result<()> {
+pub fn open(target: impl AsRef<OsStr>) -> io::Result<()> {
     let program = if cfg!(target_os = "windows") {
         "explorer"
     } else if cfg!(target_os = "macos") {
@@ -26,5 +26,5 @@ pub fn open_directory(path: &Path) -> io::Result<()> {
         "xdg-open"
     };
 
-    command(program).arg(path).spawn().map(|_| ())
+    command(program).arg(target).spawn().map(|_| ())
 }
