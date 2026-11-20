@@ -8,7 +8,7 @@ use winit::{
     window::WindowId,
 };
 
-use super::{App, Redraw, pacing::Status};
+use super::{App, Redraw, pacing::Status, with_log_path};
 
 pub(super) fn is_input(event: &WindowEvent) -> bool {
     matches!(
@@ -39,7 +39,7 @@ impl ApplicationHandler for App {
         }
 
         if let Err(e) = self.start(event_loop) {
-            log::error!("{e}");
+            self.startup_error = Some(with_log_path(e));
             event_loop.exit();
 
             return;

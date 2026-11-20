@@ -130,6 +130,14 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+      - name: Upload the Windows editor symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: symbols-rmd-${{ needs.metadata.outputs.version }}-x86_64-pc-windows-msvc.pdb
+          path: target/x86_64-pc-windows-msvc/release/rmde.pdb
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Upload the Windows server artifact
         uses: actions/upload-artifact@v4
         with:

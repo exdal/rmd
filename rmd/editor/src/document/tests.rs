@@ -928,6 +928,22 @@ fn failed_save_does_not_remove_untouched_appended_levels() {
 }
 
 #[test]
+fn export_matches_what_save_writes() {
+    let dir = std::env::temp_dir().join(format!("rmd-export-document-{}", process::id()));
+    fs::create_dir_all(&dir).expect("temp dir");
+    let target = dir.join("exported.dmm");
+    let _ = fs::remove_file(&target);
+    let mut document = MapDocument::create(&target, shared_tile_map(), 1);
+    assert!(document.is_dirty());
+
+    let exported = document.export();
+    document.save().expect("save");
+
+    assert_eq!(fs::read_to_string(&target).unwrap(), exported);
+    let _ = fs::remove_file(&target);
+}
+
+#[test]
 fn a_created_document_is_dirty_and_will_not_replace_its_first_target() {
     let dir = std::env::temp_dir().join(format!("rmd-created-document-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");

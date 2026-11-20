@@ -835,6 +835,12 @@ impl MapDocument {
         self.save_as_with(path, format, sanitize)
     }
 
+    pub fn export(&self) -> String {
+        let exported = self.to_map();
+
+        writer::MapWriter::new(&exported).with_format(self.format).write()
+    }
+
     pub fn save_as(&mut self, path: impl Into<PathBuf>, format: MapFormat) -> std::io::Result<()> {
         self.save_as_with(path, format, None)
     }

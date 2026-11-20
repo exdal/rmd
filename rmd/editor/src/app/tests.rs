@@ -33,6 +33,7 @@ fn headless_editor() -> App {
         retry_coop_after_load: false,
         deferred_job: None,
         settings_ready: true,
+        startup_error: None,
         uploaded_texture_revision: None,
         pending_screenshot: None,
         screenshot_dir: None,

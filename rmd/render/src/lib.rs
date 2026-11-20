@@ -313,7 +313,7 @@ pub(crate) fn extent3d(extent: ash::vk::Extent2D) -> ash::vk::Extent3D {
 pub(crate) fn read_spirv(bytes: &[u8]) -> Result<Vec<u32>, GpuError> {
     let mut cursor = std::io::Cursor::new(bytes);
 
-    ash::util::read_spv(&mut cursor).map_err(|e| GpuError::Loader(e.to_string()))
+    ash::util::read_spv(&mut cursor).map_err(|e| GpuError::InvalidShader(e.to_string()))
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ use ash::{ext, khr, vk};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use vir::{Context, DomainFlag, Image, ImageAttachment, PersistentAllocator, SwapChain, allocator::Allocator};
 
-use crate::error::GpuError;
+use crate::error::{GpuError, RejectedDevice, Shortfall};
 
 pub struct Device {
     pub allocator: PersistentAllocator,
@@ -181,6 +181,12 @@ fn load_fallback(error: ash::LoadingError) -> Result<ash::Entry, GpuError> {
 }
 
 fn create_instance(entry: &ash::Entry, window: RawWindowHandle) -> Result<ash::Instance, GpuError> {
+    let minimum = vk::make_api_version(0, 1, 3, 0);
+    let found = unsafe { entry.try_enumerate_instance_version() }?.unwrap_or(vk::API_VERSION_1_0);
+    if found < minimum {
+        return Err(GpuError::InstanceTooOld { found });
+    }
+
     let mut extensions = vec![
         khr::surface::NAME,
         khr::get_surface_capabilities2::NAME,
@@ -188,6 +194,12 @@ fn create_instance(entry: &ash::Entry, window: RawWindowHandle) -> Result<ash::I
         surface_extension(window)?,
     ];
     let available = unsafe { entry.enumerate_instance_extension_properties(None) }?;
+    for name in &extensions {
+        if !has_extension(&available, name) {
+            return Err(GpuError::MissingInstanceExtension(name.to_string_lossy().into_owned()));
+        }
+    }
+
     if has_extension(&available, ext::debug_utils::NAME) {
         extensions.push(ext::debug_utils::NAME);
     }
@@ -198,13 +210,17 @@ fn create_instance(entry: &ash::Entry, window: RawWindowHandle) -> Result<ash::I
         .application_version(vk::make_api_version(0, 0, 0, 0))
         .engine_name(c"vir")
         .engine_version(vk::make_api_version(0, 0, 0, 0))
-        .api_version(vk::make_api_version(0, 1, 3, 0));
+        .api_version(minimum);
 
     let create_info = vk::InstanceCreateInfo::default()
         .application_info(&app_info)
         .enabled_extension_names(&pointers);
 
-    Ok(unsafe { entry.create_instance(&create_info, None) }?)
+    match unsafe { entry.create_instance(&create_info, None) } {
+        Ok(instance) => Ok(instance),
+        Err(vk::Result::ERROR_INCOMPATIBLE_DRIVER) => Err(GpuError::InstanceTooOld { found }),
+        Err(e) => Err(e.into()),
+    }
 }
 
 struct SelectedDevice {
@@ -236,71 +252,110 @@ fn bindless_texture_limit(
         .min(limits.max_per_stage_resources.saturating_sub(1))
 }
 
-fn select_physical_device(instance: &ash::Instance) -> Result<SelectedDevice, GpuError> {
+fn device_name(properties: &vk::PhysicalDeviceProperties) -> String {
+    properties
+        .device_name_as_c_str()
+        .unwrap_or(c"unknown")
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn check_device(
+    instance: &ash::Instance, handle: vk::PhysicalDevice, properties: &vk::PhysicalDeviceProperties,
+) -> Result<SelectedDevice, Vec<Shortfall>> {
     let minimum = vk::make_api_version(0, 1, 3, 0);
+    // older devices leave the Vulkan 1.2 feature and property structs unfilled, so every later check would misfire
+    if properties.api_version < minimum {
+        return Err(vec![Shortfall::ApiVersion {
+            found: properties.api_version,
+        }]);
+    }
+
+    let mut shortfalls = Vec::new();
+    match unsafe { instance.enumerate_device_extension_properties(handle) } {
+        Ok(extensions) => {
+            if !has_extension(&extensions, khr::swapchain::NAME) {
+                shortfalls.push(Shortfall::NoSwapchain);
+            }
+        },
+        Err(e) => shortfalls.push(Shortfall::ExtensionQueryFailed(e)),
+    }
+
+    let mut vk12 = vk::PhysicalDeviceVulkan12Features::default();
+    let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut vk12);
+    unsafe { instance.get_physical_device_features2(handle, &mut features) };
+    if features.features.independent_blend == vk::FALSE {
+        shortfalls.push(Shortfall::MissingFeature("independentBlend"));
+    }
+
+    if vk12.runtime_descriptor_array == vk::FALSE {
+        shortfalls.push(Shortfall::MissingFeature("runtimeDescriptorArray"));
+    }
+
+    if vk12.shader_sampled_image_array_non_uniform_indexing == vk::FALSE {
+        shortfalls.push(Shortfall::MissingFeature("shaderSampledImageArrayNonUniformIndexing"));
+    }
+
+    let is_update_after_bind = vk12.descriptor_binding_sampled_image_update_after_bind == vk::TRUE;
+
+    let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
+    let mut vk12_properties = vk::PhysicalDeviceVulkan12Properties::default();
+    let mut properties2 = vk::PhysicalDeviceProperties2::default()
+        .push_next(&mut subgroup)
+        .push_next(&mut vk12_properties);
+    unsafe { instance.get_physical_device_properties2(handle, &mut properties2) };
+    if !subgroup.supported_stages.contains(vk::ShaderStageFlags::COMPUTE)
+        || !subgroup
+            .supported_operations
+            .contains(vk::SubgroupFeatureFlags::BASIC | vk::SubgroupFeatureFlags::BALLOT)
+    {
+        shortfalls.push(Shortfall::MissingSubgroupOps);
+    }
+
+    let families = unsafe { instance.get_physical_device_queue_family_properties(handle) };
+    if first_queue(&families, vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE).is_none() {
+        shortfalls.push(Shortfall::NoGraphicsComputeQueue);
+    }
+
+    let limits = properties.limits;
+    let max_bindless_textures = bindless_texture_limit(&limits, &vk12_properties, is_update_after_bind);
+    if max_bindless_textures == 0 {
+        shortfalls.push(Shortfall::NoBindlessTextures);
+    }
+
+    if !shortfalls.is_empty() {
+        return Err(shortfalls);
+    }
+
+    Ok(SelectedDevice {
+        physical_device: handle,
+        queue_families: families,
+        max_bindless_textures,
+        max_compute_work_group_count_x: limits.max_compute_work_group_count[0],
+        max_image_dimension_2d: limits.max_image_dimension2_d,
+        is_update_after_bind,
+    })
+}
+
+fn select_physical_device(instance: &ash::Instance) -> Result<SelectedDevice, GpuError> {
     let devices = unsafe { instance.enumerate_physical_devices() }?;
 
-    let mut candidates = devices
-        .into_iter()
-        .filter_map(|handle| {
-            let properties = unsafe { instance.get_physical_device_properties(handle) };
-            if properties.api_version < minimum {
-                return None;
-            }
-
-            let extensions = unsafe { instance.enumerate_device_extension_properties(handle) }.ok()?;
-            if !has_extension(&extensions, khr::swapchain::NAME) {
-                return None;
-            }
-
-            let mut vk12 = vk::PhysicalDeviceVulkan12Features::default();
-            let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut vk12);
-            unsafe { instance.get_physical_device_features2(handle, &mut features) };
-            if features.features.independent_blend == vk::FALSE
-                || vk12.runtime_descriptor_array == vk::FALSE
-                || vk12.shader_sampled_image_array_non_uniform_indexing == vk::FALSE
-            {
-                return None;
-            }
-
-            let is_update_after_bind = vk12.descriptor_binding_sampled_image_update_after_bind == vk::TRUE;
-
-            let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
-            let mut vk12_properties = vk::PhysicalDeviceVulkan12Properties::default();
-            let mut properties2 = vk::PhysicalDeviceProperties2::default()
-                .push_next(&mut subgroup)
-                .push_next(&mut vk12_properties);
-            unsafe { instance.get_physical_device_properties2(handle, &mut properties2) };
-            if !subgroup.supported_stages.contains(vk::ShaderStageFlags::COMPUTE)
-                || !subgroup
-                    .supported_operations
-                    .contains(vk::SubgroupFeatureFlags::BASIC | vk::SubgroupFeatureFlags::BALLOT)
-            {
-                return None;
-            }
-
-            let families = unsafe { instance.get_physical_device_queue_family_properties(handle) };
-            first_queue(&families, vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)?;
-
-            let limits = properties.limits;
-            let max_bindless_textures = bindless_texture_limit(&limits, &vk12_properties, is_update_after_bind);
-            if max_bindless_textures == 0 {
-                return None;
-            }
-
-            Some((
-                properties,
-                SelectedDevice {
-                    physical_device: handle,
-                    queue_families: families,
-                    max_bindless_textures,
-                    max_compute_work_group_count_x: limits.max_compute_work_group_count[0],
-                    max_image_dimension_2d: limits.max_image_dimension2_d,
-                    is_update_after_bind,
-                },
-            ))
-        })
-        .collect::<Vec<_>>();
+    let mut candidates = Vec::new();
+    let mut rejected = Vec::new();
+    for handle in devices {
+        let properties = unsafe { instance.get_physical_device_properties(handle) };
+        match check_device(instance, handle, &properties) {
+            Ok(selected) => candidates.push((properties, selected)),
+            Err(shortfalls) => {
+                let device = RejectedDevice {
+                    name: device_name(&properties),
+                    shortfalls,
+                };
+                log::info!("gpu rejected: {device}");
+                rejected.push(device);
+            },
+        }
+    }
 
     candidates.sort_by_key(|(properties, _)| {
         (
@@ -309,13 +364,13 @@ fn select_physical_device(instance: &ash::Instance) -> Result<SelectedDevice, Gp
         )
     });
 
-    let (properties, selected) = candidates.into_iter().next().ok_or(GpuError::NoSuitableDevice)?;
+    let (properties, selected) = candidates
+        .into_iter()
+        .next()
+        .ok_or(GpuError::NoSuitableDevice(rejected))?;
     log::info!(
         "gpu: {} ({:?}, driver {:#x}), {} bindless textures, update after bind: {}",
-        properties
-            .device_name_as_c_str()
-            .unwrap_or(c"unknown")
-            .to_string_lossy(),
+        device_name(&properties),
         properties.device_type,
         properties.driver_version,
         selected.max_bindless_textures,

@@ -2,10 +2,17 @@ use std::{path::PathBuf, process::ExitCode};
 
 use crate::environment::is_map;
 
+#[cfg(target_os = "windows")]
+use super::dialog::show_error;
+
+const USAGE: &str =
+    "usage: rmde\n       rmde <file.dme> [file.dmm] [z]\n       rmde <file.dme> [z]\n       rmde <file.dmm> [z]";
+
 pub(super) fn usage() -> ExitCode {
-    log::error!(
-        "usage: rmde\n       rmde <file.dme> [file.dmm] [z]\n       rmde <file.dme> [z]\n       rmde <file.dmm> [z]"
-    );
+    log::error!("{USAGE}");
+
+    #[cfg(target_os = "windows")]
+    show_error("rmd usage", USAGE);
 
     ExitCode::FAILURE
 }
