@@ -44,6 +44,12 @@ impl World {
         self.turfs.get(&pos).copied()
     }
 
+    pub fn contains(&self, pos: Position) -> bool {
+        let [x, y, z] = self.size;
+
+        (1..=x).contains(&pos.x) && (1..=y).contains(&pos.y) && (1..=z).contains(&pos.z)
+    }
+
     pub fn position(&self, heap: &Heap, id: ObjectId) -> Option<Position> {
         let mut next = Some(id);
         for _ in 0..=heap.objects.len() {

@@ -21,10 +21,11 @@ pub enum ProfileHook {
     Bake,
     Ui,
     ProcessModularRoot,
+    Generate,
 }
 
 impl ProfileHook {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::New,
         Self::Prepare,
         Self::Connections,
@@ -33,6 +34,7 @@ impl ProfileHook {
         Self::Bake,
         Self::Ui,
         Self::ProcessModularRoot,
+        Self::Generate,
     ];
 
     pub const fn name(self) -> &'static str {
@@ -45,6 +47,7 @@ impl ProfileHook {
             Self::Bake => "bake",
             Self::Ui => "ui",
             Self::ProcessModularRoot => "process_modular_root",
+            Self::Generate => "generate",
         }
     }
 }

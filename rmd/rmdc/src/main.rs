@@ -430,7 +430,7 @@ fn bake_map(
         .flatten();
 
     let bake_started = std::time::Instant::now();
-    let mut bake = vm::bake::Bake::with_profile_and_progress(
+    let mut pending = vm::bake::Bake::initialize_with_profile_and_progress(
         &tree,
         &module,
         profile,
@@ -445,6 +445,8 @@ fn bake_map(
             .and_then(|entry| file_path::relative(entry.parent()?, map_path)),
         |_, _, _| {},
     );
+    pending.generate(|_, _, _| {});
+    let mut bake = pending.finish_with_progress(|_, _, _| {});
     let bake_seconds = bake_started.elapsed().as_secs_f64();
     report_bake_output(&mut bake);
 

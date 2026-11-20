@@ -19,6 +19,7 @@ pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 pub(crate) const PROFILE: &str = include_str!("../../tests/fixtures/programs/module_preview_profile.dm");
 pub(crate) const COORDINATE_PROFILE: &str = include_str!("../../tests/fixtures/programs/module_coordinate_profile.dm");
+pub(crate) const GENERATE_PROFILE: &str = include_str!("../../tests/fixtures/programs/module_generate_profile.dm");
 pub(crate) const WALL: &str = "/turf/closed/wall";
 pub(crate) const MODULE: &str = "/obj/module";
 pub(crate) const ROOT: &str = "/obj/modular_map_root";
