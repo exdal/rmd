@@ -1,4 +1,4 @@
-use base::{coord::Coord, location::Location};
+use base::{coord::Coord, location::Location, types::Value};
 
 use prefab::Prefab;
 
@@ -6,7 +6,7 @@ use super::*;
 use crate::{
     environment::progress::Progress,
     focus::AreaFocus,
-    session::fixtures::{assert_render_cache_matches_rebuild, examples, unknown_paths_session},
+    session::fixtures::{assert_render_cache_matches_rebuild, examples, issue_vars_session, unknown_paths_session},
 };
 
 #[test]
@@ -76,7 +76,14 @@ fn bulk_replacement_preserves_each_override_identity_and_order_with_one_undo() {
         assert_eq!(instance.location, location);
     }
     assert_eq!(session.map_issues(id).len(), 1);
-    assert_eq!(session.caches[&id].instances.unknown_type_instances().count(), 2);
+    assert_eq!(
+        session.caches[&id]
+            .instances
+            .instance_issues()
+            .filter(|(_, issues)| issues.contains(&InstanceIssue::UnknownType))
+            .count(),
+        2
+    );
     assert!(session.state.document(id).unwrap().is_dirty());
     assert_render_cache_matches_rebuild(&session);
     assert!(session.undo());
@@ -230,4 +237,118 @@ fn tiles_missing_a_turf_or_area_are_listed_and_filled_in_one_undo_step() {
     assert!(session.undo());
     assert_eq!(*session.missing_base_tiles(id), missing);
     assert!(!session.fill_missing_bases(id, &[]));
+}
+
+fn prefab(path: &str, vars: &[(&str, Value)]) -> Prefab {
+    let mut prefab = Prefab::new(TreePath::parse(path));
+    for (name, value) in vars {
+        prefab.set_var((*name).into(), value.clone());
+    }
+
+    prefab
+}
+
+fn base() -> Vec<Prefab> {
+    vec![prefab("/turf/open/floor", &[]), prefab("/area/station", &[])]
+}
+
+fn with(extra: Prefab) -> Vec<Prefab> {
+    let mut tile = base();
+    tile.push(extra);
+
+    tile
+}
+
+#[test]
+fn a_tile_with_two_areas_reports_both_but_two_turfs_report_nothing() {
+    let mut two_areas = base();
+    two_areas.push(prefab("/area/station/extra", &[]));
+    let mut two_turfs = base();
+    two_turfs.push(prefab("/turf/open/plating", &[]));
+    let mut session = issue_vars_session(vec![two_areas, two_turfs, base()]);
+    let id = id_for(&session);
+
+    let flagged = session.multiple_area_instances(id);
+    let ids = session
+        .state
+        .document(id)
+        .unwrap()
+        .instance_ids_at(Coord::new(1, 1, 1))
+        .to_vec();
+    assert_eq!(*flagged, [ids[1], ids[2]]);
+    assert_eq!(session.take_loaded_issues(), Some(id));
+    assert_eq!(session.issue_count(id), 2);
+}
+
+#[test]
+fn builtin_and_inherited_vars_are_defined_and_undeclared_ones_flagged_per_instance() {
+    let defined = [
+        ("dir", Value::Num(2.0)),
+        ("name", Value::Text("x".into())),
+        ("icon_state", Value::Text("y".into())),
+        ("pixel_x", Value::Num(3.0)),
+        ("layer", Value::Num(4.0)),
+        ("shared", Value::Num(2.0)),
+    ];
+    let session = issue_vars_session(vec![
+        with(prefab("/obj/base/child", &defined)),
+        with(prefab(
+            "/obj/base/child",
+            &[("bogus", Value::Num(1.0)), ("shared", Value::Num(1.0))],
+        )),
+        with(prefab(
+            "/obj/base",
+            &[("bogus", Value::Num(2.0)), ("other", Value::Num(2.0))],
+        )),
+    ]);
+    let id = id_for(&session);
+    let groups = session.undefined_vars(id);
+
+    assert_eq!(
+        groups.iter().map(|group| group.name.to_string()).collect::<Vec<_>>(),
+        ["bogus", "other"]
+    );
+    assert_eq!(groups[0].instances.len(), 2);
+    assert_eq!(groups[1].instances.len(), 1);
+    let document = session.state.document(id).unwrap();
+    assert_eq!(
+        document.instance_location(groups[0].instances[0]).unwrap().coord,
+        Coord::new(2, 1, 1)
+    );
+    assert_eq!(
+        document.instance_location(groups[0].instances[1]).unwrap().coord,
+        Coord::new(3, 1, 1)
+    );
+}
+
+#[test]
+fn an_unknown_type_with_an_odd_var_is_only_an_unknown_path() {
+    let session = issue_vars_session(vec![with(prefab("/obj/gone", &[("bogus", Value::Num(1.0))]))]);
+    let id = id_for(&session);
+
+    assert!(session.undefined_vars(id).is_empty());
+    assert_eq!(session.map_issues(id).len(), 1);
+}
+
+#[test]
+fn tile_problems_update_after_an_edit_and_remove_vars_in_one_undo_step() {
+    let mut session = issue_vars_session(vec![
+        with(prefab("/obj/base", &[("bogus", Value::Num(1.0))])),
+        with(prefab("/obj/base/child", &[("bogus", Value::Num(2.0))])),
+    ]);
+    let id = id_for(&session);
+    let group = &session.undefined_vars(id)[0];
+    let (name, instances) = (group.name.clone(), group.instances.clone());
+    assert_eq!(instances.len(), 2);
+
+    assert!(session.remove_issue_var(id, &instances, &name));
+    assert!(session.undefined_vars(id).is_empty());
+    assert!(session.undo());
+    assert_eq!(session.undefined_vars(id)[0].instances.len(), 2);
+
+    assert!(session.remove_issue_var(id, &instances[..1], &name));
+    assert_eq!(session.undefined_vars(id)[0].instances, instances[1..]);
+
+    session.state.document_mut(id).unwrap().set_read_only(true);
+    assert!(!session.remove_issue_var(id, &instances[1..], &name));
 }

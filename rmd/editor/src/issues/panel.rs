@@ -1,4 +1,4 @@
-use base::{coord::Coord, path::TreePath};
+use base::{coord::Coord, path::TreePath, types::Identifier};
 use prefab::PrefabInstanceId;
 use std::collections::HashSet;
 
@@ -35,6 +35,15 @@ enum Action {
         document: DocumentId,
         tiles: Vec<Coord>,
     },
+    DeleteInstance {
+        document: DocumentId,
+        instance: PrefabInstanceId,
+    },
+    RemoveVar {
+        document: DocumentId,
+        instances: Vec<PrefabInstanceId>,
+        name: Identifier,
+    },
 }
 
 #[derive(Default)]
@@ -47,15 +56,23 @@ pub(crate) struct IssuesOutput {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum IssueKey {
     MissingBase,
+    MultipleAreas,
     UnknownPath(TreePath),
+    UndefinedVar(Identifier),
 }
 
 impl IssueKey {
     fn label(&self) -> String {
         match self {
             Self::MissingBase => String::from("Missing turf or area"),
+            Self::MultipleAreas => String::from("Multiple areas on a tile"),
             Self::UnknownPath(path) => path.to_string(),
+            Self::UndefinedVar(name) => format!("Undefined var {name}"),
         }
+    }
+
+    fn has_labeled_rows(&self) -> bool {
+        matches!(self, Self::MultipleAreas | Self::UndefinedVar(_))
     }
 }
 
@@ -70,6 +87,13 @@ enum Row {
         document: DocumentId,
         coord: Coord,
         instance: Option<PrefabInstanceId>,
+    },
+    Instance {
+        document: DocumentId,
+        coord: Coord,
+        instance: PrefabInstanceId,
+        label: String,
+        var: Option<Identifier>,
     },
 }
 
@@ -135,20 +159,14 @@ impl IssuesPanel {
             .document_ids()
             .into_iter()
             .filter(|id| self.all_maps || Some(*id) == session.state.active())
-            .map(|id| {
-                session
-                    .map_issues(id)
-                    .iter()
-                    .map(|group| group.instances.len())
-                    .sum::<usize>()
-                    + session.missing_base_tiles(id).len()
-            })
+            .map(|id| session.issue_count(id))
             .sum::<usize>();
         let title = if count == 0 {
             String::from("Map Issues")
         } else {
             format!("Map Issues ({count})")
         };
+
         let mut action = None;
         ui.window(window.label(title))
             .opened(open)
@@ -259,6 +277,22 @@ impl IssuesPanel {
                             coord,
                             instance,
                         } => self.draw_tile(ui, session, tree, *document, *coord, *instance, action, output),
+                        Row::Instance {
+                            document,
+                            coord,
+                            instance,
+                            label,
+                            var,
+                        } => self.draw_instance(
+                            ui,
+                            session,
+                            *document,
+                            (*coord, *instance),
+                            label,
+                            var.as_ref(),
+                            action,
+                            output,
+                        ),
                     }
                 }
             });
@@ -279,26 +313,58 @@ impl IssuesPanel {
         let mut rows = Vec::new();
         for (document, title) in maps {
             let groups = session.map_issues(document);
-            let keys = std::iter::once(IssueKey::MissingBase)
-                .chain(groups.iter().map(|group| IssueKey::UnknownPath(group.path.clone())));
+            let undefined = session.undefined_vars(document);
+            let keys = [IssueKey::MissingBase, IssueKey::MultipleAreas]
+                .into_iter()
+                .chain(groups.iter().map(|group| IssueKey::UnknownPath(group.path.clone())))
+                .chain(undefined.iter().map(|group| IssueKey::UndefinedVar(group.name.clone())));
             for key in keys {
-                let tiles = self.tiles(session, document, &key);
-                if tiles.is_empty() || !matches_filter(&query, &title, &key.label()) {
+                let mut tiles = self.tiles(session, document, &key);
+                let is_group_match = matches_filter(&query, &title, &key.label());
+                if key.has_labeled_rows() && !is_group_match {
+                    tiles.retain(|(coord, instance)| {
+                        instance_label(session, document, *coord, *instance)
+                            .to_ascii_lowercase()
+                            .contains(&query)
+                    });
+                } else if !is_group_match {
+                    continue;
+                }
+
+                if tiles.is_empty() {
                     continue;
                 }
 
                 let is_expanded = self.expanded.contains(&(document, key.clone()));
+                let instance_var = match &key {
+                    IssueKey::MultipleAreas => Some(None),
+                    IssueKey::UndefinedVar(name) => Some(Some(name.clone())),
+                    _ => None,
+                };
                 rows.push(Row::Group {
                     document,
                     key,
                     count: tiles.len(),
                 });
                 if is_expanded {
-                    rows.extend(tiles.into_iter().map(|(coord, instance)| Row::Tile {
-                        document,
-                        coord,
-                        instance,
-                    }));
+                    rows.extend(
+                        tiles
+                            .into_iter()
+                            .map(|(coord, instance)| match (&instance_var, instance) {
+                                (Some(var), Some(instance)) => Row::Instance {
+                                    document,
+                                    coord,
+                                    instance,
+                                    label: instance_label(session, document, coord, Some(instance)),
+                                    var: var.clone(),
+                                },
+                                _ => Row::Tile {
+                                    document,
+                                    coord,
+                                    instance,
+                                },
+                            }),
+                    );
                 }
             }
         }
@@ -316,6 +382,18 @@ impl IssuesPanel {
                 .missing_base_tiles(id)
                 .iter()
                 .map(|coord| (*coord, None))
+                .collect(),
+            IssueKey::MultipleAreas => session
+                .multiple_area_instances(id)
+                .iter()
+                .filter_map(|instance| Some((document.instance_location(*instance)?.coord, Some(*instance))))
+                .collect(),
+            IssueKey::UndefinedVar(name) => session
+                .undefined_vars(id)
+                .iter()
+                .filter(|group| group.name == *name)
+                .flat_map(|group| &group.instances)
+                .filter_map(|instance| Some((document.instance_location(*instance)?.coord, Some(*instance))))
                 .collect(),
             IssueKey::UnknownPath(path) => session
                 .map_issues(id)
@@ -386,6 +464,20 @@ impl IssuesPanel {
 
                 ui.set_item_tooltip("Add world.turf and world.area where they are missing");
             },
+            IssueKey::MultipleAreas => {},
+            IssueKey::UndefinedVar(name) => {
+                let instances = tiles
+                    .into_iter()
+                    .filter_map(|(coord, instance)| instance.filter(|_| document_allows(session, document, coord)))
+                    .collect::<Vec<_>>();
+                if ui.with_disabled_if(instances.is_empty(), || ui.small_button("Remove all")) {
+                    *action = Some(Action::RemoveVar {
+                        document,
+                        instances,
+                        name: name.clone(),
+                    });
+                }
+            },
             IssueKey::UnknownPath(path) => {
                 let instances = tiles
                     .into_iter()
@@ -422,6 +514,47 @@ impl IssuesPanel {
                     });
                 }
             },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_instance(
+        &mut self, ui: &Ui, session: &Session, document: DocumentId, (coord, instance): (Coord, PrefabInstanceId),
+        label: &str, var: Option<&Identifier>, action: &mut Option<Action>, output: &mut IssuesOutput,
+    ) {
+        ui.indent();
+        let is_clicked = ui
+            .selectable_config(label)
+            .flags(SelectableFlags::SPAN_ALL_COLUMNS | SelectableFlags::ALLOW_OVERLAP)
+            .build();
+        ui.unindent();
+        if is_clicked {
+            *action = Some(Action::Jump(JumpTarget { document, instance }));
+        }
+
+        if let Some(_menu) = ui.begin_popup_context_item()
+            && ui.menu_item("Copy coordinates")
+        {
+            output.copy = Some(format!("{}, {}, {}", coord.x, coord.y, coord.z));
+        }
+
+        ui.table_next_column();
+        ui.table_next_column();
+        if self.all_maps {
+            ui.table_next_column();
+        }
+
+        let is_editable = document_allows(session, document, coord);
+        let text = if var.is_some() { "Remove var" } else { "Delete" };
+        if ui.with_disabled_if(!is_editable, || ui.small_button(text)) {
+            *action = Some(match var {
+                Some(name) => Action::RemoveVar {
+                    document,
+                    instances: vec![instance],
+                    name: name.clone(),
+                },
+                None => Action::DeleteInstance { document, instance },
+            });
         }
     }
 
@@ -539,6 +672,18 @@ fn apply(session: &mut Session, action: Action) -> Option<JumpTarget> {
             session.fill_missing_bases(document, &tiles);
             None
         },
+        Action::DeleteInstance { document, instance } => {
+            session.delete_instances(document, &[instance]);
+            None
+        },
+        Action::RemoveVar {
+            document,
+            instances,
+            name,
+        } => {
+            session.remove_issue_var(document, &instances, &name);
+            None
+        },
     }
 }
 
@@ -565,6 +710,21 @@ fn replace_button(
     }
 
     target
+}
+
+fn document_allows(session: &Session, id: DocumentId, coord: Coord) -> bool {
+    session
+        .state
+        .document(id)
+        .is_some_and(|document| document.allows_edit_at(coord))
+}
+
+fn instance_label(session: &Session, id: DocumentId, coord: Coord, instance: Option<PrefabInstanceId>) -> String {
+    let path = instance
+        .and_then(|instance| session.state.document(id)?.prefab_instance(instance))
+        .map_or_else(String::new, |found| found.prefab().path.to_string());
+
+    format!("{}, {}, {} - {path}", coord.x, coord.y, coord.z)
 }
 
 fn matches_filter(query: &str, title: &str, label: &str) -> bool {

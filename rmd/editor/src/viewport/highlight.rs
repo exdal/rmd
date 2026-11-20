@@ -10,15 +10,15 @@ use crate::{
     git::blame::BlameCell,
 };
 
-pub(super) const UNKNOWN_TYPE_COLOR: [f32; 3] = [0.58431375, 0.0, 1.0];
+pub(super) const ISSUE_COLOR: [f32; 3] = [0.58431375, 0.0, 1.0];
 
 #[derive(Default)]
-pub(crate) struct UnknownHighlights {
+pub(crate) struct IssueHighlights {
     key: (u64, u64),
     levels: HashMap<u32, SharedHighlights>,
 }
 
-impl UnknownHighlights {
+impl IssueHighlights {
     fn get(
         &mut self, generation: u64, revision: u64, instances: &crate::frame::FrameInstances, z: u32,
     ) -> SharedHighlights {
@@ -31,7 +31,7 @@ impl UnknownHighlights {
             .entry(z)
             .or_insert_with(|| {
                 let tiles = instances
-                    .unknown_type_coords()
+                    .issue_coords()
                     .filter(|coord| coord.z == z)
                     .map(|coord| [coord.x as i32, coord.y as i32])
                     .collect::<HashSet<_>>();
@@ -42,7 +42,7 @@ impl UnknownHighlights {
                 vec![Highlight {
                     tiles: highlight_tiles(&tiles),
                     z: z as i32,
-                    color: UNKNOWN_TYPE_COLOR,
+                    color: ISSUE_COLOR,
                     fill: 0.2,
                     outline: true,
                     when: HIGHLIGHT_ALWAYS,
@@ -153,7 +153,7 @@ impl Session {
             }
         }
 
-        set.shared.push(cache.unknown_highlights.borrow_mut().get(
+        set.shared.push(cache.issue_highlights.borrow_mut().get(
             document.generation(),
             cache.revision,
             &cache.instances,
@@ -170,7 +170,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use base::{location::Location, path::TreePath};
+    use base::{location::Location, path::TreePath, types::Value};
     use std::sync::Arc;
 
     use dmm::{Map, Size};
@@ -187,7 +187,7 @@ mod tests {
 
     fn codebase(extra_paths: &[&str]) -> LoadedCodebase {
         let mut tree = ObjectTree::new();
-        for path in ["/turf/floor", "/obj/known"]
+        for path in ["/turf/floor", "/area/station", "/obj/known"]
             .into_iter()
             .chain(extra_paths.iter().copied())
         {
@@ -209,12 +209,19 @@ mod tests {
         let known = map.intern_tile(vec![
             Prefab::new(TreePath::parse("/turf/floor")),
             Prefab::new(TreePath::parse("/obj")),
+            Prefab::new(TreePath::parse("/area/station")),
         ]);
         let unknown = map.intern_tile(
-            ["/turf/floor", "/obj/missing", "/obj/missing", "/turf/missing"]
-                .into_iter()
-                .map(|path| Prefab::new(TreePath::parse(path)))
-                .collect::<Vec<_>>(),
+            [
+                "/area/station",
+                "/turf/floor",
+                "/obj/missing",
+                "/obj/missing",
+                "/turf/missing",
+            ]
+            .into_iter()
+            .map(|path| Prefab::new(TreePath::parse(path)))
+            .collect::<Vec<_>>(),
         );
         map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/unused"))]);
         map.grid[0][0] = vec![unknown, unknown, known];
@@ -229,7 +236,7 @@ mod tests {
         session
             .highlights(id, None)
             .iter()
-            .filter(|highlight| highlight.color == UNKNOWN_TYPE_COLOR)
+            .filter(|highlight| highlight.color == ISSUE_COLOR)
             .flat_map(|highlight| highlight.tiles.iter().map(|tile| tile.position))
             .collect::<Vec<_>>()
     }
@@ -240,7 +247,7 @@ mod tests {
         let id = session.state.active().unwrap();
         let first = session.highlights(id, None);
         let highlight = first.iter().next().unwrap();
-        assert_eq!(highlight.color, UNKNOWN_TYPE_COLOR);
+        assert_eq!(highlight.color, ISSUE_COLOR);
         assert_eq!(highlight.z, 1);
         assert!(highlight.outline && highlight.fill > 0.0);
         assert!(highlight.shown_when(HIGHLIGHT_ALWAYS));
@@ -253,7 +260,14 @@ mod tests {
 
         session.set_level(2);
         assert_eq!(positions(&session), [[3, 1]]);
-        let second = session.activate_document(MapDocument::new(Map::new(Size { x: 1, y: 1, z: 1 }), 1));
+        let mut clean = Map::new(Size { x: 1, y: 1, z: 1 });
+        clean.grid[0][0][0] = clean.intern_tile(
+            ["/area/station", "/turf/floor"]
+                .into_iter()
+                .map(|path| Prefab::new(TreePath::parse(path)))
+                .collect::<Vec<_>>(),
+        );
+        let second = session.activate_document(MapDocument::new(clean, 1));
         assert_eq!(session.highlights(second, None).iter().count(), 0);
         assert_eq!(session.highlights(id, None).iter().next().unwrap().z, 2);
     }
@@ -268,7 +282,7 @@ mod tests {
             .state
             .active_document()
             .unwrap()
-            .instance_ids_at(Coord::new(1, 1, 1))[1..]
+            .instance_ids_at(Coord::new(1, 1, 1))[2..]
             .to_vec();
         assert!(session.delete_context_instance(owners[0]));
         assert_eq!(
@@ -303,6 +317,39 @@ mod tests {
     }
 
     #[test]
+    fn every_issue_kind_is_highlighted_until_fixed() {
+        let mut session = Session::new();
+        session.apply_codebase(codebase(&[]));
+        let mut bogus = Prefab::new(TreePath::parse("/obj/known"));
+        bogus.set_var("bogus".into(), Value::Num(1.0));
+        let tiles = [
+            vec!["/turf/floor"],
+            vec!["/area/station", "/area/station", "/turf/floor"],
+            vec!["/area/station", "/turf/floor"],
+            vec!["/area/station", "/turf/floor"],
+        ];
+        let mut map = Map::new(Size { x: 4, y: 1, z: 1 });
+        for (x, paths) in tiles.into_iter().enumerate() {
+            let mut tile = paths
+                .into_iter()
+                .map(|path| Prefab::new(TreePath::parse(path)))
+                .collect::<Vec<_>>();
+            if x == 2 {
+                tile.push(bogus.clone());
+            }
+
+            map.grid[0][0][x] = map.intern_tile(tile);
+        }
+
+        let id = session.activate_document(MapDocument::new(map, 1));
+        assert_eq!(positions(&session), [[1, 1], [2, 1], [3, 1]]);
+
+        let owner = session.state.document(id).unwrap().instance_ids_at(Coord::new(3, 1, 1))[2];
+        assert!(session.remove_issue_var(id, &[owner], &"bogus".into()));
+        assert_eq!(positions(&session), [[1, 1], [2, 1]]);
+    }
+
+    #[test]
     fn conflicts_remain_visible_above_unknown_type_overlays() {
         let mut session = conflicted_session();
         session.apply_codebase(codebase(&[]));
@@ -312,7 +359,7 @@ mod tests {
         let set = session.highlights(id, None);
         let highlights = set.iter().collect::<Vec<_>>();
         assert_eq!(highlights.len(), 2);
-        assert_eq!(highlights[0].color, UNKNOWN_TYPE_COLOR);
+        assert_eq!(highlights[0].color, ISSUE_COLOR);
         assert_eq!(highlights[1].color, crate::git::conflict::UNRESOLVED_COLOR);
     }
 }

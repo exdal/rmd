@@ -60,6 +60,10 @@ impl BaseKind {
     }
 }
 
+pub fn is_area(prefab: &Prefab) -> bool {
+    BaseKind::Area.is_prefab(prefab)
+}
+
 pub fn is_missing_base(tile: TileView<'_>) -> bool {
     [BaseKind::Turf, BaseKind::Area]
         .into_iter()

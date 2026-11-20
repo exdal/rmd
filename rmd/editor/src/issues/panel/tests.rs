@@ -1,7 +1,13 @@
 use super::*;
 use ui::testing::{CONTEXT_LOCK, rectangle_context};
 
-use crate::{frontend::UiState, session::fixtures::unknown_paths_session};
+use base::types::Value;
+use prefab::Prefab;
+
+use crate::{
+    frontend::UiState,
+    session::fixtures::{issue_vars_session, unknown_paths_session},
+};
 
 fn expand_all(panel: &mut IssuesPanel, session: &Session) {
     for row in panel.rows(session) {
@@ -14,7 +20,7 @@ fn expand_all(panel: &mut IssuesPanel, session: &Session) {
 fn documents(rows: &[Row]) -> HashSet<DocumentId> {
     rows.iter()
         .map(|row| match row {
-            Row::Group { document, .. } | Row::Tile { document, .. } => *document,
+            Row::Group { document, .. } | Row::Tile { document, .. } | Row::Instance { document, .. } => *document,
         })
         .collect()
 }
@@ -98,7 +104,7 @@ fn current_level_only_drops_other_levels_and_hides_emptied_groups() {
     let filtered = panel.rows(&session);
     assert!(filtered.len() < all.len());
     assert!(filtered.iter().all(|row| match row {
-        Row::Tile { coord, .. } => coord.z == level,
+        Row::Tile { coord, .. } | Row::Instance { coord, .. } => coord.z == level,
         Row::Group { .. } => true,
     }));
 
@@ -183,4 +189,145 @@ fn panel_follows_the_active_map_and_keeps_other_maps_available() {
     assert_eq!(documents(&panel.rows(&session)), HashSet::from([first, second]));
     session.close_map(first);
     assert_eq!(documents(&panel.rows(&session)), HashSet::from([second]));
+}
+
+fn tile_prefab(path: &str, vars: &[(&str, Value)]) -> Prefab {
+    let mut prefab = Prefab::new(TreePath::parse(path));
+    for (name, value) in vars {
+        prefab.set_var((*name).into(), value.clone());
+    }
+
+    prefab
+}
+
+fn problem_session() -> Session {
+    let bogus = [("bogus", Value::Num(1.0))];
+    issue_vars_session(vec![
+        vec![
+            tile_prefab("/turf/open/floor", &[]),
+            tile_prefab("/area/station", &[]),
+            tile_prefab("/area/station/extra", &[]),
+            tile_prefab("/obj/base", &bogus),
+        ],
+        vec![
+            tile_prefab("/turf/open/floor", &[]),
+            tile_prefab("/area/station", &[]),
+            tile_prefab("/obj/gone", &[]),
+            tile_prefab("/obj/base/child", &bogus),
+        ],
+    ])
+}
+
+fn instance_labels(panel: &IssuesPanel, session: &Session) -> Vec<String> {
+    panel
+        .rows(session)
+        .into_iter()
+        .filter_map(|row| match row {
+            Row::Instance { label, .. } => Some(label),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn tile_problem_groups_are_ordered_and_rows_are_labeled_by_path() {
+    let session = problem_session();
+    let mut panel = IssuesPanel::new().unwrap();
+    expand_all(&mut panel, &session);
+
+    let labels = panel
+        .rows(&session)
+        .iter()
+        .filter_map(|row| match row {
+            Row::Group { key, .. } => Some(key.label()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(labels, ["Multiple areas on a tile", "/obj/gone", "Undefined var bogus"]);
+    assert_eq!(
+        instance_labels(&panel, &session),
+        [
+            "1, 1, 1 \u{2014} /area/station",
+            "1, 1, 1 \u{2014} /area/station/extra",
+            "1, 1, 1 \u{2014} /obj/base",
+            "2, 1, 1 \u{2014} /obj/base/child",
+        ]
+    );
+
+    panel.filter = "obj/base/child".into();
+    assert_eq!(instance_labels(&panel, &session), ["2, 1, 1 \u{2014} /obj/base/child"]);
+    panel.filter = "undefined var".into();
+    assert_eq!(instance_labels(&panel, &session).len(), 2);
+}
+
+#[test]
+fn deleting_an_area_and_removing_vars_are_single_undo_steps_that_respect_read_only() {
+    let mut session = problem_session();
+    let document = session.state.active().unwrap();
+    let mut panel = IssuesPanel::new().unwrap();
+    expand_all(&mut panel, &session);
+    let area = session.multiple_area_instances(document)[1];
+
+    apply(
+        &mut session,
+        Action::DeleteInstance {
+            document,
+            instance: area,
+        },
+    );
+    assert!(session.multiple_area_instances(document).is_empty());
+    assert!(session.undo());
+    assert_eq!(session.multiple_area_instances(document).len(), 2);
+
+    let group = &session.undefined_vars(document)[0];
+    let (name, instances) = (group.name.clone(), group.instances.clone());
+    apply(
+        &mut session,
+        Action::RemoveVar {
+            document,
+            instances: instances[..1].to_vec(),
+            name: name.clone(),
+        },
+    );
+    assert_eq!(session.undefined_vars(document)[0].instances.len(), 1);
+    assert!(session.undo());
+    apply(
+        &mut session,
+        Action::RemoveVar {
+            document,
+            instances,
+            name,
+        },
+    );
+    assert!(session.undefined_vars(document).is_empty());
+    assert!(session.undo());
+    assert_eq!(session.undefined_vars(document)[0].instances.len(), 2);
+
+    session.state.document_mut(document).unwrap().set_read_only(true);
+    assert!(!document_allows(&session, document, Coord::new(1, 1, 1)));
+    apply(
+        &mut session,
+        Action::DeleteInstance {
+            document,
+            instance: area,
+        },
+    );
+    assert_eq!(session.multiple_area_instances(document).len(), 2);
+}
+
+#[test]
+fn tile_problem_rows_render() {
+    let _guard = CONTEXT_LOCK.lock().unwrap();
+    let mut context = rectangle_context();
+    let mut session = problem_session();
+    let mut panel = IssuesPanel::new().unwrap();
+    panel.request(session.state.active());
+    expand_all(&mut panel, &session);
+    let mut open = true;
+    for _ in 0..3 {
+        panel.draw(context.frame(), &mut session, &Settings::default(), &mut open);
+        assert!(context.render_legacy().valid());
+    }
+
+    assert!(panel.visible());
 }
