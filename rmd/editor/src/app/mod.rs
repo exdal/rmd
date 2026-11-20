@@ -48,7 +48,7 @@ use crate::{
     session::Session,
     settings::{
         Settings,
-        paths::{backup_dir, imgui_ini_path, profiles_dir, themes_dir},
+        paths::{imgui_ini_path, profiles_dir, themes_dir},
     },
 };
 
@@ -129,13 +129,7 @@ pub(crate) fn run() -> ExitCode {
         ),
     };
 
-    let mut loader = match backup_dir() {
-        Ok(root) => Loader::with_backups(root),
-        Err(error) => {
-            log::warn!("map backups are off: {error}");
-            Loader::new()
-        },
-    };
+    let mut loader = Loader::new();
     let deferred_job = if settings_ready {
         if let Some(job) = startup_job {
             loader.start(job);

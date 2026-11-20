@@ -54,8 +54,7 @@ fn unmerged_map_loads_from_stages_and_can_be_saved_and_staged() {
     assert!(fixture_git(&dir, &["commit", "-qam", "ours"]).status.success());
     assert!(!fixture_git(&dir, &["merge", "feature"]).status.success());
 
-    let loaded =
-        super::load_map_with_git(&path, 1, &crate::environment::progress::Progress::new(), true, None).unwrap();
+    let loaded = super::load_map_with_git(&path, 1, &crate::environment::progress::Progress::new(), true).unwrap();
     assert_eq!(loaded.conflict.as_ref().unwrap().conflicts.len(), 1);
     assert_eq!(
         loaded.map.tile_at(Coord::new(1, 1, 1)).unwrap()[0].path.to_string(),
@@ -118,7 +117,7 @@ fn an_unreadable_repository_does_not_stop_a_map_from_opening() {
     for index in [b"not an index".to_vec(), vec![b'x'; 256]] {
         std::fs::write(dir.join(".git").join("index"), index).unwrap();
 
-        let loaded = super::load_map_with_git(&path, 1, &crate::environment::progress::Progress::new(), true, None)
+        let loaded = super::load_map_with_git(&path, 1, &crate::environment::progress::Progress::new(), true)
             .expect("the map opens without conflict detection");
 
         assert!(loaded.conflict.is_none());
@@ -157,8 +156,7 @@ fn an_unmerged_file_with_identical_tiles_still_needs_a_save() {
     assert!(fixture_git(&dir, &["commit", "-qam", "ours"]).status.success());
     assert!(!fixture_git(&dir, &["merge", "feature"]).status.success());
 
-    let loaded =
-        super::load_map_with_git(&path, 1, &crate::environment::progress::Progress::new(), true, None).unwrap();
+    let loaded = super::load_map_with_git(&path, 1, &crate::environment::progress::Progress::new(), true).unwrap();
     assert!(loaded.conflict.as_ref().unwrap().conflicts.is_empty());
     let mut session = crate::session::Session::new();
     session.apply_map(loaded);
