@@ -16,6 +16,7 @@ pub(crate) mod area;
 mod context;
 #[cfg(test)]
 pub(crate) mod fixtures;
+mod issues;
 pub(crate) mod options;
 mod pages;
 pub(crate) mod session;
@@ -26,6 +27,8 @@ use area::{
     repair_area_components,
 };
 use context::RenderContext;
+use issues::FlaggedInstance;
+pub use issues::{InstanceIssue, TileIssues};
 use options::{FrameRenderOptions, TypeVisibility};
 use pages::{OwnerKeys, SpritePage, replace_owner_sprites};
 use visual::Appearance;
@@ -82,7 +85,8 @@ pub struct FrameInstances {
     /// only primaries that are not among their owner's sprites, the rest are found through `owner_keys`
     primary_sprites: HashMap<PrefabInstanceId, SpriteInstance>,
     placements: HashMap<PrefabInstanceId, CachedPlacement>,
-    unknown_placements: HashMap<PrefabInstanceId, Coord>,
+    tile_issues: HashMap<Coord, TileIssues>,
+    instance_issues: HashMap<PrefabInstanceId, FlaggedInstance>,
     area_owners_by_coord: HashMap<Coord, Vec<PrefabInstanceId>>,
 }
 
@@ -102,7 +106,8 @@ impl FrameInstances {
         drop(std::mem::take(&mut self.primary_sprites));
         freed("primary sprites");
         drop(std::mem::take(&mut self.placements));
-        drop(std::mem::take(&mut self.unknown_placements));
+        drop(std::mem::take(&mut self.tile_issues));
+        drop(std::mem::take(&mut self.instance_issues));
         freed("placements");
         drop(std::mem::take(&mut self.area_components));
         drop(std::mem::take(&mut self.area_component_tiles));
@@ -127,12 +132,21 @@ impl FrameInstances {
         self.area_component_tiles.get(&component).cloned().unwrap_or_default()
     }
 
-    pub fn unknown_type_coords(&self) -> impl Iterator<Item = Coord> + '_ {
-        self.unknown_placements.values().copied()
+    pub fn issue_coords(&self) -> impl Iterator<Item = Coord> + '_ {
+        self.tile_issues
+            .keys()
+            .copied()
+            .chain(self.instance_issues.values().map(|flagged| flagged.coord))
     }
 
-    pub fn unknown_type_instances(&self) -> impl Iterator<Item = PrefabInstanceId> + '_ {
-        self.unknown_placements.keys().copied()
+    pub fn tile_issues(&self) -> impl Iterator<Item = (Coord, TileIssues)> + '_ {
+        self.tile_issues.iter().map(|(coord, issues)| (*coord, *issues))
+    }
+
+    pub fn instance_issues(&self) -> impl Iterator<Item = (PrefabInstanceId, &[InstanceIssue])> + '_ {
+        self.instance_issues
+            .iter()
+            .map(|(owner, flagged)| (*owner, flagged.issues.as_slice()))
     }
 
     pub fn update_lighting(&mut self, lighting: Option<&vm::bake::LightingMap>, range: Option<std::ops::Range<usize>>) {
@@ -233,7 +247,8 @@ pub fn build_view_with_options(
     let mut primary_sprites = HashMap::new();
     let mut owner_keys = HashMap::new();
     let mut placements = HashMap::new();
-    let mut unknown_placements = HashMap::new();
+    let mut tile_issues = HashMap::new();
+    let mut instance_issues = HashMap::new();
     let mut area_owners_by_coord = HashMap::<Coord, Vec<PrefabInstanceId>>::new();
     let area = tree.roots().area;
     let area_components = build_area_components(tree, map);
@@ -257,16 +272,26 @@ pub fn build_view_with_options(
                     continue;
                 };
 
+                let issues = issues::check_tile(tile);
+                if !issues.is_empty() {
+                    tile_issues.insert(Coord::new(x, y, z), issues);
+                }
+
                 for (prefab_index, prefab) in tile.iter().enumerate() {
                     let Some(owner) = map.ids_at(Coord::new(x, y, z)).get(prefab_index).copied() else {
                         continue;
                     };
-                    let Some(id) = tree.id_of(&prefab.path) else {
-                        unknown_placements.insert(owner, Coord::new(x, y, z));
+                    let coord = Coord::new(x, y, z);
+                    let ty = tree.id_of(&prefab.path);
+                    let issues = issues::check_instance(tree, prefab, ty);
+                    if !issues.is_empty() {
+                        instance_issues.insert(owner, FlaggedInstance { coord, issues });
+                    }
+
+                    let Some(id) = ty else {
                         continue;
                     };
 
-                    let coord = Coord::new(x, y, z);
                     let order = placement_order(coord, prefab_index);
                     let rendered = render.prefab(owner, prefab, id, coord, order, area_components.get(&coord).copied());
                     placements.insert(
@@ -309,7 +334,8 @@ pub fn build_view_with_options(
         area_component_tiles,
         primary_sprites,
         placements,
-        unknown_placements,
+        tile_issues,
+        instance_issues,
         area_owners_by_coord,
         owner_keys,
         ..Default::default()
@@ -331,19 +357,7 @@ pub fn update_view_prefabs_with_options(
         .collect::<Vec<_>>();
     owners.sort_unstable_by_key(|owner| owner.get());
 
-    for owner in &owners {
-        match map
-            .prefab_instance(*owner)
-            .filter(|instance| tree.id_of(&instance.prefab().path).is_none())
-        {
-            Some(instance) => {
-                instances.unknown_placements.insert(*owner, instance.location.coord);
-            },
-            None => {
-                instances.unknown_placements.remove(owner);
-            },
-        }
-    }
+    issues::update(instances, tree, map, &owners);
 
     let changes = owners
         .iter()

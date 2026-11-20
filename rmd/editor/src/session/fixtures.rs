@@ -465,6 +465,31 @@ pub(crate) fn flat_session(width: u32, height: u32) -> Session {
     session
 }
 
+pub(crate) fn issue_vars_session(tiles: Vec<Vec<Prefab>>) -> Session {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/issue_vars");
+    let mut session = Session::new();
+    session.load_environment(&root.join("vars.dme")).unwrap();
+    let mut map = Map::new(Size {
+        x: tiles.len() as u32,
+        y: 1,
+        z: 1,
+    });
+    for (x, tile) in tiles.into_iter().enumerate() {
+        map.grid[0][0][x] = map.intern_tile(tile);
+    }
+
+    session.apply_map(crate::environment::worker::LoadedMap {
+        path: root.join("map.dmm"),
+        map,
+        z: 1,
+        errors: Vec::new(),
+        repo: None,
+        conflict: None,
+    });
+
+    session
+}
+
 pub(crate) fn unknown_paths_session() -> Session {
     let mut session = Session::new();
     session.load_environment(&examples().join("test.dme")).unwrap();

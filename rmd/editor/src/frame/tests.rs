@@ -25,7 +25,7 @@ use render::{
 use vm::{AppearanceDelta, bake::SharedAppearance, matrix::Matrix};
 
 use super::{
-    FrameInstances, PrefabUpdate,
+    FrameInstances, InstanceIssue, PrefabUpdate, TileIssues,
     context::side_row,
     fixtures::{build, build_with_options, update_prefab, update_prefabs, update_prefabs_with_options},
     instance_for,
@@ -33,7 +33,11 @@ use super::{
     pages::assert_pages_hold,
 };
 use crate::{
-    document::{MapDocument, command::Edit, instance::VarMutation},
+    document::{
+        MapDocument,
+        command::Edit,
+        instance::{PlacedTile, VarMutation},
+    },
     environment::world::Perspective,
     frame::visual::Appearance,
 };
@@ -689,7 +693,8 @@ pub(super) fn assert_render_data_matches(actual: &FrameInstances, expected: &Fra
     assert_eq!(actual.area_component_tiles, expected.area_component_tiles);
     assert_eq!(actual.sprite_sort_keys.len(), actual.sprites.len());
     assert_eq!(actual.primary_sprites, expected.primary_sprites);
-    assert_eq!(actual.unknown_placements, expected.unknown_placements);
+    assert_eq!(actual.tile_issues, expected.tile_issues);
+    assert_eq!(actual.instance_issues, expected.instance_issues);
     for owner in actual.placements.keys().chain(expected.placements.keys()) {
         assert_eq!(actual.sprite(*owner), expected.sprite(*owner));
     }
@@ -1624,6 +1629,126 @@ fn deleting_an_area_splits_components_and_patches_cached_ranges() {
     assert_ne!(
         instances.area_component_at(Coord::new(1, 1, 1)),
         instances.area_component_at(Coord::new(3, 1, 1))
+    );
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
+}
+
+fn replace_tile(document: &mut MapDocument, coord: Coord, after: PlacedTile) {
+    let mut edit = Edit::new("replace tile");
+    edit.change(document, coord, after);
+    document.apply(edit);
+}
+
+fn issue_tree() -> ObjectTree {
+    tree(&[
+        ("/area/station", "floor", 1.0),
+        ("/area/station/extra", "floor", 1.0),
+        ("/turf/floor", "floor", 1.0),
+    ])
+}
+
+#[test]
+fn undefined_vars_follow_var_edits() {
+    let tree = issue_tree();
+    let textures = textures(&["floor"]);
+    let coord = Coord::new(1, 1, 1);
+    let mut document = document(one_tile_map(&["/area/station", "/turf/floor"]));
+    let owner = document.instance_ids_at(coord)[1];
+    let mut instances = build(&tree, &textures, &document, 32);
+    assert!(instances.instance_issues.is_empty());
+
+    document
+        .set_instance_var(owner, "bogus".into(), Value::Num(1.0))
+        .unwrap();
+    update_prefab(&mut instances, &tree, &textures, &document, owner, 32);
+    assert_eq!(
+        instances.instance_issues[&owner].issues,
+        [InstanceIssue::UndefinedVar("bogus".into())]
+    );
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
+
+    document
+        .edit_instance_vars(owner, "remove bogus", &[VarMutation::Remove("bogus".into())], None)
+        .unwrap();
+    update_prefab(&mut instances, &tree, &textures, &document, owner, 32);
+    assert!(instances.instance_issues.is_empty());
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
+}
+
+#[test]
+fn multiple_areas_follow_tile_edits() {
+    let tree = issue_tree();
+    let textures = textures(&["floor"]);
+    let coord = Coord::new(1, 1, 1);
+    let mut document = document(one_tile_map(&["/area/station", "/turf/floor"]));
+    let before = document.placed_tile(coord).unwrap();
+    let mut instances = build(&tree, &textures, &document, 32);
+    assert!(instances.tile_issues.is_empty());
+
+    let mut after = before.clone();
+    after.push(document.instantiate(Prefab::new(TreePath::parse("/area/station/extra"))));
+    let added = after[2].id();
+    replace_tile(&mut document, coord, after);
+    update_prefab(&mut instances, &tree, &textures, &document, added, 32);
+    assert_eq!(
+        instances.tile_issues,
+        HashMap::from([(coord, TileIssues::MULTIPLE_AREAS)])
+    );
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
+
+    replace_tile(&mut document, coord, before);
+    update_prefab(&mut instances, &tree, &textures, &document, added, 32);
+    assert!(instances.tile_issues.is_empty());
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
+}
+
+#[test]
+fn missing_bases_follow_tile_edits() {
+    let tree = issue_tree();
+    let textures = textures(&["floor"]);
+    let coord = Coord::new(1, 1, 1);
+    let mut document = document(one_tile_map(&["/area/station", "/turf/floor"]));
+    let before = document.placed_tile(coord).unwrap();
+    let turf = before[1].id();
+    let mut instances = build(&tree, &textures, &document, 32);
+    assert!(instances.tile_issues.is_empty());
+
+    let mut after = before.clone();
+    after.remove(1);
+    replace_tile(&mut document, coord, after);
+    update_prefab(&mut instances, &tree, &textures, &document, turf, 32);
+    assert_eq!(
+        instances.tile_issues,
+        HashMap::from([(coord, TileIssues::MISSING_BASE)])
+    );
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
+
+    replace_tile(&mut document, coord, before);
+    update_prefab(&mut instances, &tree, &textures, &document, turf, 32);
+    assert!(instances.tile_issues.is_empty());
+    assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
+}
+
+#[test]
+fn deleting_an_unknown_type_prefab_rechecks_its_old_tile() {
+    let tree = issue_tree();
+    let textures = textures(&["floor"]);
+    let coord = Coord::new(1, 1, 1);
+    let mut document = document(one_tile_map(&["/area/station", "/turf/never/declared"]));
+    let before = document.placed_tile(coord).unwrap();
+    let unknown = before[1].id();
+    let mut instances = build(&tree, &textures, &document, 32);
+    assert!(instances.tile_issues.is_empty());
+    assert_eq!(instances.instance_issues[&unknown].issues, [InstanceIssue::UnknownType]);
+
+    let mut after = before.clone();
+    after.remove(1);
+    replace_tile(&mut document, coord, after);
+    update_prefab(&mut instances, &tree, &textures, &document, unknown, 32);
+    assert!(instances.instance_issues.is_empty());
+    assert_eq!(
+        instances.tile_issues,
+        HashMap::from([(coord, TileIssues::MISSING_BASE)])
     );
     assert_render_data_matches(&instances, &build(&tree, &textures, &document, 32));
 }
