@@ -31,6 +31,7 @@ use winit::{
 };
 
 use crate::{
+    build_info::APP_NAME,
     document::{DocumentId, selection::Selection},
     environment::{
         compile::BakeOptions,
@@ -191,10 +192,10 @@ fn window_title(session: &Session) -> String {
         .map(|name| name.to_string_lossy().into_owned());
 
     match (session.codebase_name(), map) {
-        (Some(codebase), Some(map)) => format!("Rapid Mapping Device: {codebase} - {map}"),
-        (Some(codebase), None) => format!("Rapid Mapping Device: {codebase}"),
-        (None, Some(map)) => format!("Rapid Mapping Device: {map}"),
-        (None, None) => "Rapid Mapping Device".to_string(),
+        (Some(codebase), Some(map)) => format!("{APP_NAME}: {codebase} - {map}"),
+        (Some(codebase), None) => format!("{APP_NAME}: {codebase}"),
+        (None, Some(map)) => format!("{APP_NAME}: {map}"),
+        (None, None) => APP_NAME.to_string(),
     }
 }
 
@@ -262,6 +263,7 @@ impl App {
         let window = Arc::new(event_loop.create_window(attributes)?);
         let size = window.inner_size();
         let device = Device::new(window.window_handle()?.as_raw(), window.display_handle()?.as_raw())?;
+        self.ui.gpu = Some(device.adapter.clone());
 
         let mut imgui = Context::create();
         match arboard::Clipboard::new() {

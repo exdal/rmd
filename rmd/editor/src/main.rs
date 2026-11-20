@@ -11,6 +11,7 @@
 
 mod app;
 mod bake;
+mod build_info;
 mod clipboard;
 mod coop;
 mod dm_ui;

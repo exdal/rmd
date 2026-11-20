@@ -7,6 +7,7 @@ use std::{
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo sets CARGO_MANIFEST_DIR"));
     emit_git_rerun_paths(&manifest_dir);
+    emit_contributors(&manifest_dir);
 
     let Some(hash) = git_output(&manifest_dir, &["rev-parse", "HEAD"]) else {
         return;
@@ -24,6 +25,29 @@ fn main() {
     println!("cargo:rustc-env=RMD_VERSION_URL={repository_url}/releases/tag/v{version}");
     println!("cargo:rustc-env=RMD_COMMIT_URL={repository_url}/commit/{hash}");
     println!("cargo:rustc-env=RMD_REPOSITORY_URL={repository_url}");
+}
+
+fn emit_contributors(manifest_dir: &Path) {
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR"));
+    let log = git_output(
+        manifest_dir,
+        &["log", "--format=%an%n%(trailers:key=Co-authored-by,valueonly)"],
+    )
+    .unwrap_or_default();
+
+    let mut names = log
+        .lines()
+        .map(|line| {
+            let line = line.trim();
+            line.rsplit_once(" <").map_or(line, |(name, _)| name).trim()
+        })
+        .filter(|name| !name.is_empty() && !name.ends_with("[bot]"))
+        .collect::<Vec<_>>();
+    names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then(a.cmp(b)));
+    names.dedup();
+
+    let contents = names.iter().map(|name| format!("{name}\n")).collect::<String>();
+    fs::write(out_dir.join("contributors.txt"), contents).expect("write contributors.txt");
 }
 
 fn git_output(manifest_dir: &Path, arguments: &[&str]) -> Option<String> {

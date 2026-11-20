@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::build_info::VERSION;
+
 pub(super) fn absolute(path: &Path) -> PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -33,9 +35,7 @@ pub(crate) fn themes_dir() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn profiles_dir() -> io::Result<PathBuf> {
-    Ok(settings_path()?
-        .with_file_name("profiles")
-        .join(env!("CARGO_PKG_VERSION")))
+    Ok(settings_path()?.with_file_name("profiles").join(VERSION))
 }
 
 #[cfg(target_os = "windows")]

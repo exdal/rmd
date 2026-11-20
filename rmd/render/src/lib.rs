@@ -10,7 +10,12 @@ pub mod viewport;
 use base::coord::Coord;
 use prefab::PrefabInstanceId;
 
-pub use crate::{device::Device, error::GpuError, renderer::Renderer, viewport::SecondaryViewport};
+pub use crate::{
+    device::{AdapterInfo, Device},
+    error::GpuError,
+    renderer::Renderer,
+    viewport::SecondaryViewport,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VisibilityId(std::num::NonZeroU32);

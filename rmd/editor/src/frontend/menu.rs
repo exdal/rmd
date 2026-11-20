@@ -22,6 +22,7 @@ const MAX_UNDERLAY_DEPTH: u32 = 3;
 pub(super) struct MenuActions {
     pub(super) open: Option<OpenRequest>,
     pub(super) show_welcome: bool,
+    pub(super) show_about: bool,
     pub(super) open_save_dialog: bool,
     pub(super) new_map: bool,
     pub(super) save_all: bool,
@@ -72,6 +73,11 @@ impl UiState {
             });
             ui.menu("Window", || {
                 draw_window_menu(ui, settings, &mut actions);
+            });
+            ui.menu("Help", || {
+                if ui.menu_item("About") {
+                    actions.show_about = true;
+                }
             });
 
             if let Some(coop) = session.coop() {
