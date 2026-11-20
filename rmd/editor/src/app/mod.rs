@@ -7,6 +7,7 @@ mod logging;
 pub(crate) mod pacing;
 pub(crate) mod process;
 mod redraw;
+mod reveal;
 mod screenshot;
 #[cfg(test)]
 mod tests;
@@ -197,6 +198,7 @@ pub(crate) fn run() -> ExitCode {
         themes: None,
         ui_font: None,
         window: None,
+        is_revealed: false,
         pacer: FramePacer::default(),
         is_occluded: false,
     };
@@ -303,6 +305,7 @@ struct App {
     themes: Option<Themes>,
     ui_font: Option<UiFont>,
     window: Option<Arc<Window>>,
+    is_revealed: bool,
     pacer: FramePacer,
     is_occluded: bool,
 }
@@ -311,9 +314,9 @@ impl App {
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
         let attributes = Window::default_attributes()
             .with_title(&self.title)
-            .with_maximized(self.settings.maximized)
             .with_inner_size(LogicalSize::new(1280, 720));
-        let window = Arc::new(event_loop.create_window(attributes).map_err(window_error)?);
+        let window = reveal::create_window(event_loop, attributes, self.settings.maximized).map_err(window_error)?;
+        let window = Arc::new(window);
         let size = window.inner_size();
         let window_handle = window.window_handle().map_err(gpu_error)?.as_raw();
         let display_handle = window.display_handle().map_err(gpu_error)?.as_raw();

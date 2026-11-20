@@ -47,6 +47,7 @@ fn headless_editor() -> App {
         themes: Some(themes),
         ui_font: None,
         window: None,
+        is_revealed: false,
         pacer: FramePacer::default(),
         is_occluded: false,
     }
