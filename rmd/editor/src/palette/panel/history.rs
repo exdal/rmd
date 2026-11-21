@@ -3,6 +3,7 @@ use prefab::Prefab;
 use ui::widgets::dpi;
 
 use crate::{
+    document::state::RecentPrefab,
     palette::panel::thumbnail::{IconOrigin, draw_thumbnail},
     session::Session,
     settings::keybind::KeyBindings,
@@ -16,17 +17,19 @@ const RECENT_BADGE_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.8];
 const RECENT_BADGE_TEXT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
 pub(crate) fn draw_history_overlay(
-    ui: &Ui, session: &mut Session, keybindings: KeyBindings, bounds: OverlayRect, recent_prefabs: Vec<Prefab>,
+    ui: &Ui, session: &mut Session, keybindings: KeyBindings, bounds: OverlayRect, recent_prefabs: Vec<RecentPrefab>,
 ) {
     draw_overlay_underlay(ui, bounds);
 
     let button_size = recent_button_size(ui);
     let palette = session.palette().cloned();
     let mut chosen = None;
+    let mut toggled = None;
     let padding = overlay_padding(ui);
     ui.set_cursor_screen_pos([bounds.min[0] + padding, bounds.min[1] + padding]);
 
-    for (index, prefab) in recent_prefabs.iter().enumerate() {
+    for (index, recent) in recent_prefabs.iter().enumerate() {
+        let prefab = &recent.prefab;
         if index > 0 {
             ui.same_line();
         }
@@ -52,14 +55,31 @@ pub(crate) fn draw_history_overlay(
             }),
         );
         draw_recent_badge(ui, &key);
-        if clicked {
+        if recent.is_locked {
+            draw_lock_ring(ui);
+        }
+
+        if clicked && ui.io().key_alt() {
+            toggled = Some(index);
+        } else if clicked {
             chosen = Some(index);
         }
-        ui.set_item_tooltip(prefab_tooltip(prefab));
+
+        let hint = if recent.is_locked {
+            "Locked, Alt+click to unlock"
+        } else {
+            "Alt+click to lock"
+        };
+
+        ui.set_item_tooltip(format!("{}\n{hint}", prefab_tooltip(prefab)));
     }
 
     if let Some(index) = chosen {
         session.choose_recent(index);
+    }
+
+    if let Some(index) = toggled {
+        session.toggle_recent_lock(index);
     }
 }
 
@@ -80,6 +100,22 @@ fn draw_recent_badge(ui: &Ui, key: &str) {
         .filled(true)
         .build();
     draw.add_text([badge_min[0] + 2.0, badge_min[1] + 1.0], RECENT_BADGE_TEXT, key);
+}
+
+fn draw_lock_ring(ui: &Ui) {
+    let thickness = 2.0 * dpi(ui);
+    let half = thickness / 2.0;
+    let min = ui.item_rect_min();
+    let max = ui.item_rect_max();
+    ui.get_window_draw_list()
+        .add_rect(
+            [min[0] + half, min[1] + half],
+            [max[0] - half, max[1] - half],
+            ui.style_color(StyleColor::PlotHistogram),
+        )
+        .thickness(thickness)
+        .rounding(ui.clone_style().frame_rounding())
+        .build();
 }
 
 fn prefab_tooltip(prefab: &Prefab) -> String {

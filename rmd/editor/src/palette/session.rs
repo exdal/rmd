@@ -6,6 +6,7 @@ use render::{SpriteTexture, texture::TextureCatalog};
 
 use crate::{
     bake,
+    document::state::RecentPrefab,
     frame::{self, visual},
     session::Session,
     tool::{Tool, place::is_placeable},
@@ -69,8 +70,12 @@ impl Session {
         self.state.palette.as_ref()
     }
 
-    pub fn recent_prefabs(&self) -> &[Prefab] {
+    pub fn recent_prefabs(&self) -> &[RecentPrefab] {
         self.state.recent_prefabs()
+    }
+
+    pub fn toggle_recent_lock(&mut self, index: usize) -> bool {
+        self.state.toggle_recent_lock(index)
     }
 
     pub(crate) fn prefab_appearance(&mut self, prefab: &Prefab) -> Option<visual::Appearance> {

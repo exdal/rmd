@@ -1,5 +1,5 @@
 use prefab::Prefab;
-use std::{path::Path, sync::Arc};
+use std::{mem, path::Path, sync::Arc};
 
 use crate::{
     clipboard::TileRegion,
@@ -12,13 +12,19 @@ use crate::{
 
 pub const RECENT_PREFAB_CAPACITY: usize = 10;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecentPrefab {
+    pub prefab: Prefab,
+    pub is_locked: bool,
+}
+
 pub struct EditorState {
     pub environment: Option<Arc<Environment>>,
     documents: Vec<MapDocument>,
     active: Option<DocumentId>,
     pub tool: Tool,
     pub palette: Option<Prefab>,
-    recent_prefabs: Vec<Prefab>,
+    recent_prefabs: Vec<RecentPrefab>,
     clipboard: Option<TileRegion>,
     stash: Stash,
 }
@@ -176,43 +182,111 @@ impl EditorState {
         self.clipboard = Some(region);
     }
 
-    pub fn recent_prefabs(&self) -> &[Prefab] {
+    pub fn recent_prefabs(&self) -> &[RecentPrefab] {
         &self.recent_prefabs
     }
 
-    pub fn choose_prefab(&mut self, prefab: Prefab) {
-        if let Some(index) = self.recent_prefabs.iter().position(|recent| recent == &prefab) {
-            self.recent_prefabs.remove(index);
+    fn is_locked_prefab(&self, prefab: &Prefab) -> bool {
+        self.recent_prefabs
+            .iter()
+            .any(|recent| recent.is_locked && &recent.prefab == prefab)
+    }
+
+    fn unlocked_prefabs(&self) -> Vec<Prefab> {
+        self.recent_prefabs
+            .iter()
+            .filter(|recent| !recent.is_locked)
+            .map(|recent| recent.prefab.clone())
+            .collect::<Vec<_>>()
+    }
+
+    fn rebuild_recent(&mut self, unlocked: Vec<Prefab>) {
+        let mut locked = mem::take(&mut self.recent_prefabs)
+            .into_iter()
+            .enumerate()
+            .filter(|(_, recent)| recent.is_locked)
+            .peekable();
+        let mut unlocked = unlocked.into_iter();
+        let mut rebuilt = Vec::with_capacity(RECENT_PREFAB_CAPACITY);
+
+        while rebuilt.len() < RECENT_PREFAB_CAPACITY {
+            if locked.peek().is_some_and(|(index, _)| *index == rebuilt.len()) {
+                rebuilt.extend(locked.next().map(|(_, recent)| recent));
+            } else if let Some(prefab) = unlocked.next() {
+                rebuilt.push(RecentPrefab {
+                    prefab,
+                    is_locked: false,
+                });
+            } else if let Some((_, recent)) = locked.next() {
+                rebuilt.push(recent);
+            } else {
+                break;
+            }
         }
-        self.recent_prefabs.insert(0, prefab.clone());
-        self.recent_prefabs.truncate(RECENT_PREFAB_CAPACITY);
+
+        self.recent_prefabs = rebuilt;
+    }
+
+    fn promote_recent(&mut self, prefab: &Prefab) {
+        let mut unlocked = self.unlocked_prefabs();
+        unlocked.retain(|recent| recent != prefab);
+        unlocked.insert(0, prefab.clone());
+        self.rebuild_recent(unlocked);
+    }
+
+    pub fn choose_prefab(&mut self, prefab: Prefab) {
+        if !self.is_locked_prefab(&prefab) {
+            self.promote_recent(&prefab);
+        }
+
         self.palette = Some(prefab);
     }
 
     pub fn choose_recent(&mut self, index: usize) -> bool {
-        let Some(prefab) = (index < self.recent_prefabs.len()).then(|| self.recent_prefabs.remove(index)) else {
+        let Some(recent) = self.recent_prefabs.get(index) else {
             return false;
         };
 
-        self.recent_prefabs.insert(0, prefab.clone());
+        let prefab = recent.prefab.clone();
+        if !recent.is_locked {
+            self.promote_recent(&prefab);
+        }
+
         self.palette = Some(prefab);
 
         true
     }
 
     pub fn replace_palette(&mut self, prefab: Prefab) -> bool {
-        let Some(previous) = self.palette.as_ref() else {
+        let Some(previous) = self.palette.clone() else {
             return false;
         };
-        if previous == &prefab {
+        if previous == prefab {
             return false;
         }
 
-        self.recent_prefabs
-            .retain(|recent| recent != previous && recent != &prefab);
-        self.recent_prefabs.insert(0, prefab.clone());
-        self.recent_prefabs.truncate(RECENT_PREFAB_CAPACITY);
+        if !self.is_locked_prefab(&prefab) {
+            let mut unlocked = self.unlocked_prefabs();
+            unlocked.retain(|recent| recent != &previous && recent != &prefab);
+            unlocked.insert(0, prefab.clone());
+            self.rebuild_recent(unlocked);
+        } else if !self.is_locked_prefab(&previous) {
+            let mut unlocked = self.unlocked_prefabs();
+            unlocked.retain(|recent| recent != &previous);
+            self.rebuild_recent(unlocked);
+        }
+
         self.palette = Some(prefab);
+
+        true
+    }
+
+    pub fn toggle_recent_lock(&mut self, index: usize) -> bool {
+        let Some(recent) = self.recent_prefabs.get_mut(index) else {
+            return false;
+        };
+
+        recent.is_locked = !recent.is_locked;
 
         true
     }
@@ -224,13 +298,25 @@ mod tests {
     use prefab::Prefab;
     use std::path::Path;
 
-    use super::{EditorState, RECENT_PREFAB_CAPACITY};
+    use super::{EditorState, RECENT_PREFAB_CAPACITY, RecentPrefab};
     use crate::{
         clipboard::{TileRegion, copy_region},
         document::{MapDocument, selection::Selection},
         frame::options::HiddenTypes,
         tool::RegionSelectionMode,
     };
+
+    fn prefabs(state: &EditorState) -> Vec<Prefab> {
+        state
+            .recent_prefabs()
+            .iter()
+            .map(|recent| recent.prefab.clone())
+            .collect::<Vec<_>>()
+    }
+
+    fn item(index: usize) -> Prefab {
+        Prefab::new(TreePath::parse(&format!("/obj/item/{index}")))
+    }
 
     fn region() -> TileRegion {
         let mut map = dmm::Map::new(dmm::Size { x: 2, y: 2, z: 1 });
@@ -354,15 +440,15 @@ mod tests {
         }
 
         assert_eq!(state.recent_prefabs().len(), RECENT_PREFAB_CAPACITY);
-        assert_eq!(state.recent_prefabs()[0].path, TreePath::parse("/obj/item/11"));
-        assert_eq!(state.recent_prefabs()[9].path, TreePath::parse("/obj/item/2"));
+        assert_eq!(state.recent_prefabs()[0].prefab.path, TreePath::parse("/obj/item/11"));
+        assert_eq!(state.recent_prefabs()[9].prefab.path, TreePath::parse("/obj/item/2"));
 
         let mut overridden = Prefab::new(TreePath::parse("/obj/item/11"));
         overridden.set_var("name".into(), Value::Text("custom".into()));
         state.choose_prefab(overridden.clone());
 
-        assert_eq!(state.recent_prefabs()[0], overridden);
-        assert_eq!(state.recent_prefabs()[1].path, TreePath::parse("/obj/item/11"));
+        assert_eq!(state.recent_prefabs()[0].prefab, overridden);
+        assert_eq!(state.recent_prefabs()[1].prefab.path, TreePath::parse("/obj/item/11"));
     }
 
     #[test]
@@ -374,8 +460,8 @@ mod tests {
 
         assert!(state.choose_recent(2));
         assert_eq!(state.palette.as_ref().unwrap().path, TreePath::parse("/obj/one"));
-        assert_eq!(state.recent_prefabs()[0].path, TreePath::parse("/obj/one"));
-        assert_eq!(state.recent_prefabs()[1].path, TreePath::parse("/obj/three"));
+        assert_eq!(state.recent_prefabs()[0].prefab.path, TreePath::parse("/obj/one"));
+        assert_eq!(state.recent_prefabs()[1].prefab.path, TreePath::parse("/obj/three"));
         assert!(!state.choose_recent(9));
     }
 
@@ -391,8 +477,120 @@ mod tests {
 
         assert!(state.replace_palette(rotated.clone()));
         assert_eq!(state.palette.as_ref(), Some(&rotated));
-        assert_eq!(state.recent_prefabs(), [rotated, older]);
+        assert_eq!(prefabs(&state), [rotated, older]);
         assert!(!state.replace_palette(state.palette.clone().unwrap()));
         assert!(!EditorState::new().replace_palette(current));
+    }
+
+    #[test]
+    fn a_locked_slot_keeps_its_index_through_many_picks() {
+        let mut state = EditorState::new();
+        for index in 0..RECENT_PREFAB_CAPACITY {
+            state.choose_prefab(item(index));
+        }
+        let locked = state.recent_prefabs()[2].prefab.clone();
+        assert!(state.toggle_recent_lock(2));
+
+        for index in 100..100 + RECENT_PREFAB_CAPACITY + 3 {
+            state.choose_prefab(item(index));
+            assert_eq!(state.recent_prefabs().len(), RECENT_PREFAB_CAPACITY);
+            assert_eq!(state.recent_prefabs()[2].prefab, locked);
+            assert!(state.recent_prefabs()[2].is_locked);
+        }
+
+        assert_eq!(state.recent_prefabs()[0].prefab, item(112));
+        assert_eq!(state.recent_prefabs()[1].prefab, item(111));
+        assert_eq!(state.recent_prefabs()[3].prefab, item(110));
+    }
+
+    #[test]
+    fn choosing_a_locked_prefab_only_sets_the_palette() {
+        let mut state = EditorState::new();
+        for index in 0..4 {
+            state.choose_prefab(item(index));
+        }
+        state.toggle_recent_lock(3);
+        let before = state.recent_prefabs().to_vec();
+
+        assert!(state.choose_recent(3));
+        assert_eq!(state.palette, Some(item(0)));
+        assert_eq!(state.recent_prefabs(), before);
+
+        state.choose_prefab(item(2));
+        let before = state.recent_prefabs().to_vec();
+        state.choose_prefab(item(0));
+        assert_eq!(state.palette, Some(item(0)));
+        assert_eq!(state.recent_prefabs(), before);
+    }
+
+    #[test]
+    fn replacing_a_locked_palette_keeps_the_locked_entry() {
+        let mut state = EditorState::new();
+        let current = item(0);
+        state.choose_prefab(item(1));
+        state.choose_prefab(current.clone());
+        state.toggle_recent_lock(0);
+        let mut rotated = current.clone();
+        rotated.set_var("dir".into(), Value::Num(4.0));
+
+        assert!(state.replace_palette(rotated.clone()));
+        assert_eq!(state.palette.as_ref(), Some(&rotated));
+        assert_eq!(
+            state.recent_prefabs(),
+            [
+                RecentPrefab {
+                    prefab: current,
+                    is_locked: true
+                },
+                RecentPrefab {
+                    prefab: rotated,
+                    is_locked: false
+                },
+                RecentPrefab {
+                    prefab: item(1),
+                    is_locked: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn toggling_a_lock_flips_it_and_rejects_bad_indices() {
+        let mut state = EditorState::new();
+        state.choose_prefab(item(0));
+
+        assert!(state.toggle_recent_lock(0));
+        assert!(state.recent_prefabs()[0].is_locked);
+        assert!(state.toggle_recent_lock(0));
+        assert!(!state.recent_prefabs()[0].is_locked);
+        assert!(!state.toggle_recent_lock(5));
+    }
+
+    #[test]
+    fn a_fully_locked_list_ignores_new_picks() {
+        let mut state = EditorState::new();
+        for index in 0..RECENT_PREFAB_CAPACITY {
+            state.choose_prefab(item(index));
+        }
+        for index in 0..RECENT_PREFAB_CAPACITY {
+            state.toggle_recent_lock(index);
+        }
+        let before = state.recent_prefabs().to_vec();
+
+        state.choose_prefab(item(99));
+        assert_eq!(state.palette, Some(item(99)));
+        assert_eq!(state.recent_prefabs(), before);
+    }
+
+    #[test]
+    fn a_locked_entry_closes_gaps_it_cannot_fill() {
+        let mut state = EditorState::new();
+        for index in 0..3 {
+            state.choose_prefab(item(index));
+        }
+        state.toggle_recent_lock(2);
+        state.rebuild_recent(vec![item(7)]);
+
+        assert_eq!(prefabs(&state), [item(7), item(0)]);
     }
 }

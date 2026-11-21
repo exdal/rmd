@@ -104,7 +104,8 @@ fn placement_rotation_replaces_directional_paths_in_one_recent_slot() {
     let rotated = session.palette().unwrap();
     assert_eq!(rotated.path, TreePath::parse("/obj/alarm/directional/east"));
     assert_eq!(rotated.var(&"dir".into()), None);
-    assert_eq!(session.recent_prefabs(), std::slice::from_ref(rotated));
+    assert_eq!(session.recent_prefabs().len(), 1);
+    assert_eq!(session.recent_prefabs()[0].prefab, *rotated);
     assert_eq!(
         session
             .placement_direction()

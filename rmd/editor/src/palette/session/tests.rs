@@ -141,7 +141,7 @@ fn tree_choices_place_new_objects_incrementally_and_select_them() {
         session.picked_prefab().unwrap().path,
         TreePath::parse("/obj/structure/table")
     );
-    assert_eq!(session.recent_prefabs()[0], *session.picked_prefab().unwrap());
+    assert_eq!(session.recent_prefabs()[0].prefab, *session.picked_prefab().unwrap());
     assert!(session.instances().unwrap().sprite(picked).is_some());
     assert_eq!(session.revision(), revision.wrapping_add(1));
     assert_eq!(session.frame_update().unwrap().previous_revision, revision);
@@ -158,7 +158,7 @@ fn choosing_a_prefab_sets_the_brush_and_switches_to_place() {
     session.choose_prefab(table.clone());
     assert_eq!(session.palette(), Some(&table));
     assert_eq!(session.tool(), Tool::Place);
-    assert_eq!(session.recent_prefabs()[0], table);
+    assert_eq!(session.recent_prefabs()[0].prefab, table);
 
     for tool in [Tool::Fill, Tool::RectFill, Tool::Select] {
         session.set_tool(tool);
