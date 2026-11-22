@@ -29,6 +29,7 @@ struct RowFrame {
     padding: f32,
     spacing: f32,
     line: f32,
+    line_gap: f32,
     text: [f32; 4],
     dim: [f32; 4],
 }
@@ -53,12 +54,12 @@ impl RowFrame {
             limit -= self.spacing;
         }
 
-        let block = lines.len() as f32 * self.line + lines.len().saturating_sub(1) as f32 * self.spacing;
+        let block = lines.len() as f32 * self.line + lines.len().saturating_sub(1) as f32 * self.line_gap;
         let mut y = self.min[1] + (self.height - block) * 0.5;
         ui.with_clip_rect([left, self.min[1]], [limit, self.min[1] + self.height], true, || {
             for (text, color) in lines {
                 draw.add_text([left, y], *color, text);
-                y += self.line + self.spacing;
+                y += self.line + self.line_gap;
             }
         });
     }
@@ -70,7 +71,8 @@ impl CommandPalette {
         let width = WIDTH * dpi(ui);
         let inner_width = width - 2.0 * style.window_padding()[0];
         let spacing_y = style.item_spacing()[1];
-        let row_height = (THUMBNAIL * dpi(ui)).max(2.0 * ui.text_line_height() + spacing_y);
+        let row_height =
+            (THUMBNAIL * dpi(ui)).max(2.0 * ui.text_line_height() + spacing_y) + 2.0 * style.frame_padding()[1];
         let viewport = ui.main_viewport();
         let (position, size) = (viewport.work_pos(), viewport.work_size());
         unsafe {
@@ -217,6 +219,7 @@ impl CommandPalette {
                 padding: style.frame_padding()[0],
                 spacing: style.item_spacing()[0],
                 line: ui.text_line_height(),
+                line_gap: style.item_spacing()[1],
                 text: ui.style_color(StyleColor::Text),
                 dim: ui.style_color(StyleColor::TextDisabled),
             };
