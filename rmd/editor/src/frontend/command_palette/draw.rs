@@ -1,6 +1,8 @@
 use std::{mem, ptr};
 
-use dear_imgui_rs::{Condition, Key, StyleColor, Ui, sys};
+use dear_imgui_rs::{
+    Condition, InputTextCallback, InputTextCallbackHandler, Key, StyleColor, TextCallbackData, Ui, sys,
+};
 use ui::widgets::dpi;
 
 use super::{
@@ -19,6 +21,22 @@ const THUMBNAIL: f32 = 32.0;
 const VISIBLE_ROWS: usize = 12;
 const INPUT_ID: &str = "##command-palette-input";
 const HINT: &str = "Search atoms  (> actions, @ areas)";
+
+/// ImGui selects all text when the input gains keyboard focus, so a prefilled query needs the cursor moved after it
+struct CursorToEnd<'a> {
+    is_pending: &'a mut bool,
+}
+
+impl InputTextCallbackHandler for CursorToEnd<'_> {
+    fn on_always(&mut self, mut data: TextCallbackData<'_>) {
+        if !mem::take(self.is_pending) {
+            return;
+        }
+
+        data.set_cursor_pos(data.str().len());
+        data.clear_selection();
+    }
+}
 
 struct RowFrame {
     min: [f32; 2],
@@ -96,8 +114,10 @@ impl CommandPalette {
             return Outcome::Close;
         };
 
-        let toggle = settings.keybindings.get(KeybindAction::CommandPalette);
-        if ui.is_key_pressed(Key::Escape) || (!ui.is_window_appearing() && toggle.is_pressed(ui)) {
+        let is_toggled = [KeybindAction::CommandPalette, KeybindAction::CommandPaletteActions]
+            .into_iter()
+            .any(|action| settings.keybindings.get(action).is_pressed(ui));
+        if ui.is_key_pressed(Key::Escape) || (!ui.is_window_appearing() && is_toggled) {
             ui.close_current_popup();
 
             return Outcome::Close;
@@ -110,7 +130,13 @@ impl CommandPalette {
             ui.set_keyboard_focus_here();
         }
 
-        ui.input_text(INPUT_ID, &mut self.query).hint(HINT).build();
+        ui.input_text(INPUT_ID, &mut self.query)
+            .hint(HINT)
+            .callback_flags(InputTextCallback::ALWAYS)
+            .callback(CursorToEnd {
+                is_pending: &mut self.is_cursor_pending,
+            })
+            .build();
 
         if self.ranked.as_deref() != Some(self.query.as_str()) {
             let query = mem::take(&mut self.query);

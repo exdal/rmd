@@ -63,10 +63,11 @@ pub(crate) struct CommandPalette {
     results: Vec<usize>,
     selected: usize,
     is_scroll_pending: bool,
+    is_cursor_pending: bool,
 }
 
 impl CommandPalette {
-    fn new(session: &Session, settings: &Settings) -> Self {
+    fn new(session: &Session, settings: &Settings, query: &str) -> Self {
         let placed = session
             .state
             .active()
@@ -82,14 +83,15 @@ impl CommandPalette {
                 .iter()
                 .map(|path| PathCandidate::new(None, path))
                 .collect::<Vec<_>>(),
-            query: String::new(),
+            query: query.to_owned(),
             ranked: None,
             mode: Mode::Prefabs,
             results: Vec::new(),
             selected: 0,
             is_scroll_pending: false,
+            is_cursor_pending: !query.is_empty(),
         };
-        palette.rank("");
+        palette.rank(query);
 
         palette
     }
@@ -285,12 +287,21 @@ impl UiState {
     pub(super) fn draw_command_palette(
         &mut self, ui: &Ui, session: &mut Session, settings: &Settings, loading: bool, menu: &mut MenuActions,
     ) {
-        let is_key_open = settings.keybindings.get(KeybindAction::CommandPalette).is_pressed(ui)
+        let is_openable = !loading
             && !ui.io().want_text_input()
             && !self.settings_window.is_capturing_keybind()
             && !ui.is_popup_open_with_flags("", PopupQueryFlags::ANY_POPUP);
-        if !loading && (is_key_open || menu.command_palette) {
-            self.command_palette = Some(CommandPalette::new(session, settings));
+        let is_pressed = |action| is_openable && settings.keybindings.get(action).is_pressed(ui);
+        let query = if is_pressed(KeybindAction::CommandPaletteActions) {
+            Some(">")
+        } else if is_pressed(KeybindAction::CommandPalette) || (!loading && menu.command_palette) {
+            Some("")
+        } else {
+            None
+        };
+
+        if let Some(query) = query {
+            self.command_palette = Some(CommandPalette::new(session, settings, query));
             ui.open_popup(POPUP);
         }
 

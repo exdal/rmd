@@ -59,7 +59,7 @@ fn session_with(tiles: Vec<Vec<Prefab>>) -> Session {
 }
 
 fn prefabs(session: &Session, query: &str) -> (CommandPalette, Vec<(String, u32)>) {
-    let mut palette = CommandPalette::new(session, &Settings::default());
+    let mut palette = CommandPalette::new(session, &Settings::default(), "");
     palette.rank(query);
     assert_eq!(palette.mode, Mode::Prefabs);
     let listed = palette
@@ -144,6 +144,16 @@ fn press_ctrl_p(app: &mut RectangleUiHarness) {
     app.step();
 }
 
+fn press_ctrl_shift_p(app: &mut RectangleUiHarness) {
+    app.key(Key::ModCtrl, true);
+    app.key(Key::ModShift, true);
+    app.key(Key::P, true);
+    app.key(Key::P, false);
+    app.key(Key::ModShift, false);
+    app.key(Key::ModCtrl, false);
+    app.step();
+}
+
 fn open(app: &mut RectangleUiHarness) {
     press_ctrl_p(app);
     app.step();
@@ -202,6 +212,20 @@ fn an_action_runs_through_the_frame_menu_actions() {
 }
 
 #[test]
+fn ctrl_shift_p_opens_the_palette_in_action_mode_with_the_cursor_after_the_prefix() {
+    let _guard = CONTEXT_LOCK.lock().unwrap();
+    let mut app = RectangleUiHarness::new();
+    let before = app.session.options.show_lighting;
+    press_ctrl_shift_p(&mut app);
+    app.step();
+    type_text(&mut app, "lighting");
+
+    tap(&mut app, Key::Enter);
+
+    assert_ne!(app.session.options.show_lighting, before);
+}
+
+#[test]
 fn choosing_an_area_centers_the_view_and_leaves_the_selection_alone() {
     let _guard = CONTEXT_LOCK.lock().unwrap();
     let mut app = RectangleUiHarness::new();
@@ -253,7 +277,7 @@ fn open_map_takes_map_names_as_arguments() {
             .unwrap()
             .clone()
     };
-    let mut palette = CommandPalette::new(&app.session, &app.settings);
+    let mut palette = CommandPalette::new(&app.session, &app.settings, "");
 
     palette.rank(">open map test2 test");
     assert_eq!(
@@ -275,7 +299,7 @@ fn open_codebase_takes_one_recent_codebase_as_argument() {
         recent_codebases: vec![PathBuf::from("/repos/other/other.dme"), tg.clone()],
         ..Settings::default()
     };
-    let mut palette = CommandPalette::new(&Session::new(), &settings);
+    let mut palette = CommandPalette::new(&Session::new(), &settings, "");
 
     palette.rank(">open tg");
     assert_eq!(palette.choice(0), Some(Choice::Codebase(tg)));
