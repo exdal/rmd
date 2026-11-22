@@ -5,14 +5,16 @@ use dear_imgui_rs::{PopupQueryFlags, Ui};
 use prefab::Prefab;
 
 use self::{
-    candidate::{ActionCandidate, AreaCandidate, PrefabCandidate, build_actions, build_areas, build_prefabs},
+    candidate::{
+        ActionCandidate, AreaCandidate, Arguments, PrefabCandidate, build_actions, build_areas, build_prefabs,
+    },
     command::Command,
 };
 use super::{OpenRequest, ScreenshotRequest, UiState, menu::MenuActions};
 use crate::{
     fuzzy::{
         Query,
-        maps::{MapCandidate, build_maps, rank_maps},
+        paths::{PathCandidate, build_maps, rank_paths},
         score, split_arguments,
     },
     search::SearchQuery,
@@ -40,6 +42,7 @@ enum Choice {
     Command(Command),
     Area(Prefab),
     Maps(Vec<PathBuf>),
+    Codebase(PathBuf),
 }
 
 enum Outcome {
@@ -52,8 +55,8 @@ pub(crate) struct CommandPalette {
     prefabs: Vec<PrefabCandidate>,
     areas: Vec<AreaCandidate>,
     actions: Vec<ActionCandidate>,
-    maps: Vec<MapCandidate>,
-    map_indices: Vec<usize>,
+    maps: Vec<PathCandidate>,
+    codebases: Vec<PathCandidate>,
     query: String,
     ranked: Option<String>,
     mode: Mode,
@@ -63,7 +66,7 @@ pub(crate) struct CommandPalette {
 }
 
 impl CommandPalette {
-    fn new(session: &Session) -> Self {
+    fn new(session: &Session, settings: &Settings) -> Self {
         let placed = session
             .state
             .active()
@@ -74,7 +77,11 @@ impl CommandPalette {
             areas: build_areas(session, &placed),
             actions: build_actions(session),
             maps: build_maps(session),
-            map_indices: Vec::new(),
+            codebases: settings
+                .recent_codebases
+                .iter()
+                .map(|path| PathCandidate::new(None, path))
+                .collect::<Vec<_>>(),
             query: String::new(),
             ranked: None,
             mode: Mode::Prefabs,
@@ -99,15 +106,9 @@ impl CommandPalette {
         let (mode, text) = split_mode(query);
         let query = Query::parse(text);
         self.mode = mode;
-        self.map_indices.clear();
         self.results = match mode {
             Mode::Prefabs => rank_prefabs(&self.prefabs, &query),
-            Mode::Actions => {
-                let (results, map_indices) = rank_actions(&self.actions, &self.maps, &query);
-                self.map_indices = map_indices;
-
-                results
-            },
+            Mode::Actions => rank_actions(&mut self.actions, &self.maps, &self.codebases, &query),
             Mode::Areas => rank_areas(&self.areas, &query),
         };
         self.results.truncate(MAX_RESULTS);
@@ -119,18 +120,13 @@ impl CommandPalette {
         Some(match self.mode {
             Mode::Prefabs => Choice::Prefab(self.prefabs[index].prefab.clone()),
             Mode::Actions => {
-                let command = self.actions[index].command;
-                if command == Command::OpenMap && !self.map_indices.is_empty() {
-                    let paths = self
-                        .map_indices
-                        .iter()
-                        .map(|&map| self.maps[map].path.clone())
-                        .collect::<Vec<_>>();
+                let action = &self.actions[index];
 
-                    return Some(Choice::Maps(paths));
+                match &action.arguments {
+                    Arguments::None => Choice::Command(action.command),
+                    Arguments::Maps(paths) => Choice::Maps(paths.clone()),
+                    Arguments::Codebase(path) => Choice::Codebase(path.clone()),
                 }
-
-                Choice::Command(command)
             },
             Mode::Areas => Choice::Area(self.areas[index].prefab.clone()),
         })
@@ -214,46 +210,68 @@ fn rank_areas(areas: &[AreaCandidate], query: &Query) -> Vec<usize> {
     scored.into_iter().map(|(index, _)| index).collect::<Vec<_>>()
 }
 
-fn rank_actions(actions: &[ActionCandidate], maps: &[MapCandidate], query: &Query) -> (Vec<usize>, Vec<usize>) {
-    if query.is_empty() {
-        return ((0..actions.len()).collect::<Vec<_>>(), Vec::new());
+fn rank_actions(
+    actions: &mut [ActionCandidate], maps: &[PathCandidate], codebases: &[PathCandidate], query: &Query,
+) -> Vec<usize> {
+    for candidate in actions.iter_mut() {
+        candidate.arguments = Arguments::None;
     }
 
-    let mut map_indices = Vec::new();
-    let mut scored = actions
-        .iter()
-        .enumerate()
-        .filter_map(|(index, candidate)| {
-            if let Some(score) = score(query, &candidate.haystack) {
-                return Some((index, score));
-            }
+    if query.is_empty() {
+        return (0..actions.len()).collect::<Vec<_>>();
+    }
 
-            if candidate.command != Command::OpenMap {
-                return None;
-            }
+    let mut scored = Vec::new();
+    for (index, candidate) in actions.iter_mut().enumerate() {
+        if let Some(score) = score(query, &candidate.haystack) {
+            scored.push((index, score));
 
-            let (score, arguments) = split_arguments(query, &candidate.haystack)?;
-            map_indices = resolve_maps(maps, arguments)?;
+            continue;
+        }
 
-            Some((index, score))
-        })
-        .collect::<Vec<_>>();
+        let Some((score, arguments)) = split_arguments(query, &candidate.haystack) else {
+            continue;
+        };
+
+        let Some(arguments) = resolve_arguments(candidate.command, arguments, maps, codebases) else {
+            continue;
+        };
+
+        candidate.arguments = arguments;
+        scored.push((index, score));
+    }
+
     scored.sort_by(|&(a, a_score), &(b, b_score)| {
         b_score
             .cmp(&a_score)
             .then_with(|| actions[a].command.label().cmp(actions[b].command.label()))
     });
 
-    (
-        scored.into_iter().map(|(index, _)| index).collect::<Vec<_>>(),
-        map_indices,
-    )
+    scored.into_iter().map(|(index, _)| index).collect::<Vec<_>>()
 }
 
-fn resolve_maps(maps: &[MapCandidate], tokens: &[String]) -> Option<Vec<usize>> {
+fn resolve_arguments(
+    command: Command, words: &[String], maps: &[PathCandidate], codebases: &[PathCandidate],
+) -> Option<Arguments> {
+    match command {
+        Command::OpenMap => resolve_maps(maps, words).map(Arguments::Maps),
+        Command::OpenCodebase => {
+            let [word] = words else {
+                return None;
+            };
+
+            let best = *rank_paths(codebases, &Query::parse(word)).first()?;
+
+            Some(Arguments::Codebase(codebases[best].path.clone()))
+        },
+        _ => None,
+    }
+}
+
+fn resolve_maps(maps: &[PathCandidate], words: &[String]) -> Option<Vec<PathBuf>> {
     let mut resolved = Vec::new();
-    for token in tokens {
-        let best = *rank_maps(maps, &Query::parse(token)).first()?;
+    for word in words {
+        let best = maps[*rank_paths(maps, &Query::parse(word)).first()?].path.clone();
 
         if !resolved.contains(&best) {
             resolved.push(best);
@@ -272,7 +290,7 @@ impl UiState {
             && !self.settings_window.is_capturing_keybind()
             && !ui.is_popup_open_with_flags("", PopupQueryFlags::ANY_POPUP);
         if !loading && (is_key_open || menu.command_palette) {
-            self.command_palette = Some(CommandPalette::new(session));
+            self.command_palette = Some(CommandPalette::new(session, settings));
             ui.open_popup(POPUP);
         }
 
@@ -301,6 +319,7 @@ impl UiState {
             Choice::Command(command) => self.apply_command(session, menu, command),
             Choice::Area(prefab) => self.jump_to_area(session, prefab),
             Choice::Maps(paths) => menu.open = Some(OpenRequest::Maps(paths)),
+            Choice::Codebase(path) => menu.open = Some(OpenRequest::Codebase(path)),
         }
     }
 

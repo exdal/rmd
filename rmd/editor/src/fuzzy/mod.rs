@@ -1,4 +1,4 @@
-pub(crate) mod maps;
+pub(crate) mod paths;
 
 const PATH_EXACT_SEGMENT: u32 = 120;
 const PATH_SEGMENT_PREFIX: u32 = 100;

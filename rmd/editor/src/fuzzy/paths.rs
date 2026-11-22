@@ -1,20 +1,23 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use super::{Haystack, Query, score};
 use crate::session::Session;
 
-pub(crate) struct MapCandidate {
+pub(crate) struct PathCandidate {
     pub(crate) path: PathBuf,
     haystack: Haystack,
 }
 
-impl MapCandidate {
+impl PathCandidate {
     pub(crate) fn new(base: Option<&Path>, path: &Path) -> Self {
         let relative = base.and_then(|base| path.strip_prefix(base).ok()).unwrap_or(path);
         let text = relative
             .with_extension("")
             .components()
-            .map(|component| component.as_os_str().to_string_lossy())
+            .filter_map(|component| match component {
+                Component::Normal(part) => Some(part.to_string_lossy()),
+                _ => None,
+            })
             .collect::<Vec<_>>()
             .join("/");
 
@@ -25,27 +28,27 @@ impl MapCandidate {
     }
 }
 
-pub(crate) fn build_maps(session: &Session) -> Vec<MapCandidate> {
+pub(crate) fn build_maps(session: &Session) -> Vec<PathCandidate> {
     session
         .maps()
         .iter()
-        .map(|path| MapCandidate::new(session.codebase_dir(), path))
+        .map(|path| PathCandidate::new(session.codebase_dir(), path))
         .collect::<Vec<_>>()
 }
 
 /// Ties go to the shorter path
-pub(crate) fn rank_maps(maps: &[MapCandidate], query: &Query) -> Vec<usize> {
+pub(crate) fn rank_paths(paths: &[PathCandidate], query: &Query) -> Vec<usize> {
     if query.is_empty() {
-        return (0..maps.len()).collect::<Vec<_>>();
+        return (0..paths.len()).collect::<Vec<_>>();
     }
 
-    let mut scored = maps
+    let mut scored = paths
         .iter()
         .enumerate()
         .filter_map(|(index, candidate)| Some((index, score(query, &candidate.haystack)?)))
         .collect::<Vec<_>>();
     scored.sort_by(|&(a, a_score), &(b, b_score)| {
-        let (a, b) = (&maps[a].path, &maps[b].path);
+        let (a, b) = (&paths[a].path, &paths[b].path);
 
         b_score
             .cmp(&a_score)

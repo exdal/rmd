@@ -8,7 +8,10 @@ use prefab::Prefab;
 use ui::testing::CONTEXT_LOCK;
 
 use super::{Choice, CommandPalette, Mode, command::Command, representative_tile};
-use crate::{environment::worker::LoadedMap, frontend::fixtures::RectangleUiHarness, session::Session, tool::Tool};
+use crate::{
+    environment::worker::LoadedMap, frontend::fixtures::RectangleUiHarness, session::Session, settings::Settings,
+    tool::Tool,
+};
 
 #[test]
 fn representative_tile_is_on_the_busiest_level_nearest_its_center() {
@@ -56,7 +59,7 @@ fn session_with(tiles: Vec<Vec<Prefab>>) -> Session {
 }
 
 fn prefabs(session: &Session, query: &str) -> (CommandPalette, Vec<(String, u32)>) {
-    let mut palette = CommandPalette::new(session);
+    let mut palette = CommandPalette::new(session, &Settings::default());
     palette.rank(query);
     assert_eq!(palette.mode, Mode::Prefabs);
     let listed = palette
@@ -250,7 +253,7 @@ fn open_map_takes_map_names_as_arguments() {
             .unwrap()
             .clone()
     };
-    let mut palette = CommandPalette::new(&app.session);
+    let mut palette = CommandPalette::new(&app.session, &app.settings);
 
     palette.rank(">open map test2 test");
     assert_eq!(
@@ -262,5 +265,21 @@ fn open_map_takes_map_names_as_arguments() {
     assert_eq!(palette.choice(0), Some(Choice::Command(Command::OpenMap)));
 
     palette.rank(">open map zzzz");
+    assert!(palette.results.is_empty());
+}
+
+#[test]
+fn open_codebase_takes_one_recent_codebase_as_argument() {
+    let tg = PathBuf::from("/repos/tgstation/tgstation.dme");
+    let settings = Settings {
+        recent_codebases: vec![PathBuf::from("/repos/other/other.dme"), tg.clone()],
+        ..Settings::default()
+    };
+    let mut palette = CommandPalette::new(&Session::new(), &settings);
+
+    palette.rank(">open tg");
+    assert_eq!(palette.choice(0), Some(Choice::Codebase(tg)));
+
+    palette.rank(">open tg other");
     assert!(palette.results.is_empty());
 }

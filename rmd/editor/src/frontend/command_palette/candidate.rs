@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use base::path::TreePath;
 use objtree::ObjectTree;
@@ -36,9 +36,17 @@ pub(super) struct AreaCandidate {
     pub(super) count: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Arguments {
+    None,
+    Maps(Vec<PathBuf>),
+    Codebase(PathBuf),
+}
+
 pub(super) struct ActionCandidate {
     pub(super) command: Command,
     pub(super) haystack: Haystack,
+    pub(super) arguments: Arguments,
 }
 
 fn edited_candidate(tree: &ObjectTree, prefab: &Prefab, count: u32) -> Option<PrefabCandidate> {
@@ -146,6 +154,7 @@ pub(super) fn build_actions(session: &Session) -> Vec<ActionCandidate> {
         .map(|command| ActionCandidate {
             haystack: Haystack::label(command.label()),
             command,
+            arguments: Arguments::None,
         })
         .collect::<Vec<_>>()
 }

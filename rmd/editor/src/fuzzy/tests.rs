@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::{
     Haystack, Query,
-    maps::{MapCandidate, rank_maps},
+    paths::{PathCandidate, rank_paths},
     score,
 };
 
@@ -41,9 +41,9 @@ fn the_map_query_does_not_match_the_codebase_directory_itself() {
     // The haystack is relative, so a codebase living under a directory called "maps" must not make
     // every one of its maps match the word.
     let base = Path::new("/home/maps/tg");
-    let maps = [MapCandidate::new(Some(base), Path::new("/home/maps/tg/station.dmm"))];
+    let maps = [PathCandidate::new(Some(base), Path::new("/home/maps/tg/station.dmm"))];
 
-    assert!(rank_maps(&maps, &Query::parse("home")).is_empty());
+    assert!(rank_paths(&maps, &Query::parse("home")).is_empty());
 }
 
 #[test]
@@ -56,9 +56,9 @@ fn the_real_map_ranks_before_ruins_that_mention_it() {
         "_maps/RandomRuins/IceRuins/icemoon_underground_lavaland.dmm",
         "_maps/map_files/Mining/Lavaland.dmm",
     ];
-    let maps = paths.map(|path| MapCandidate::new(Some(base), &base.join(path)));
+    let maps = paths.map(|path| PathCandidate::new(Some(base), &base.join(path)));
 
-    let ranked = rank_maps(&maps, &Query::parse("lavaland"));
+    let ranked = rank_paths(&maps, &Query::parse("lavaland"));
 
     assert_eq!(ranked.first(), Some(&4));
 }

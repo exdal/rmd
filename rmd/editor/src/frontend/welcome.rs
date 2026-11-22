@@ -19,7 +19,7 @@ use crate::{
     },
     fuzzy::{
         Query,
-        maps::{build_maps, rank_maps},
+        paths::{build_maps, rank_paths},
     },
     session::Session,
     settings::Settings,
@@ -339,7 +339,7 @@ fn draw_map_list(
     ui: &Ui, session: &Session, base: &Path, map_filter: &str, maps_expanded: &mut bool, out: &mut WelcomeOutput,
 ) {
     let maps = build_maps(session);
-    let matching = rank_maps(&maps, &Query::parse(map_filter));
+    let matching = rank_paths(&maps, &Query::parse(map_filter));
     let limit = if *maps_expanded {
         usize::MAX
     } else {
