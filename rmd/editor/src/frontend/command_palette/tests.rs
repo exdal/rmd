@@ -7,43 +7,8 @@ use objtree::TypeId;
 use prefab::Prefab;
 use ui::testing::CONTEXT_LOCK;
 
-use super::{
-    Choice, CommandPalette, Mode,
-    command::Command,
-    matcher::{Haystack, Query, score},
-    representative_tile,
-};
+use super::{Choice, CommandPalette, Mode, command::Command, representative_tile};
 use crate::{environment::worker::LoadedMap, frontend::fixtures::RectangleUiHarness, session::Session, tool::Tool};
-
-fn path_score(query: &str, path: &str) -> Option<u32> {
-    score(&Query::parse(query), &Haystack::new(path, None, None))
-}
-
-#[test]
-fn tokens_score_by_where_they_land_and_all_must_match() {
-    assert!(
-        path_score("airlock", "/obj/machinery/door/airlock")
-            > path_score("airlock", "/obj/machinery/door/airlock/engineering")
-    );
-    assert_eq!(
-        path_score("airlock eng", "/obj/machinery/door/airlock/engineering"),
-        Some(60 + 100)
-    );
-    assert_eq!(
-        path_score("airlock eng", "/obj/machinery/door/airlock/glass_engineering"),
-        Some(60 + 80)
-    );
-    assert_eq!(path_score("airlock eng", "/obj/machinery/door/airlock"), None);
-    assert_eq!(path_score("mchnry", "/obj/machinery"), Some(10));
-}
-
-#[test]
-fn names_and_overrides_match_when_the_path_does_not() {
-    let haystack = Haystack::new("/obj/item/foo", Some("Welding Tool"), Some("desc = \"Rusty\""));
-
-    assert_eq!(score(&Query::parse("weld"), &haystack), Some(70));
-    assert_eq!(score(&Query::parse("rusty"), &haystack), Some(30));
-}
 
 #[test]
 fn representative_tile_is_on_the_busiest_level_nearest_its_center() {

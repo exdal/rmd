@@ -1,11 +1,12 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
 
 use base::path::TreePath;
 use objtree::ObjectTree;
 use prefab::{Prefab, prefabs_equal};
 
-use super::{command::Command, matcher::Haystack};
+use super::command::Command;
 use crate::{
+    fuzzy::Haystack,
     palette::panel::prefab_menu::override_lines,
     session::Session,
     tool::place::is_placeable,
@@ -37,12 +38,6 @@ pub(super) struct AreaCandidate {
 
 pub(super) struct ActionCandidate {
     pub(super) command: Command,
-    pub(super) haystack: Haystack,
-}
-
-pub(super) struct MapCandidate {
-    pub(super) path: PathBuf,
-    pub(super) name: String,
     pub(super) haystack: Haystack,
 }
 
@@ -151,34 +146,6 @@ pub(super) fn build_actions(session: &Session) -> Vec<ActionCandidate> {
         .map(|command| ActionCandidate {
             haystack: Haystack::label(command.label()),
             command,
-        })
-        .collect::<Vec<_>>()
-}
-
-pub(super) fn build_maps(session: &Session) -> Vec<MapCandidate> {
-    session
-        .maps()
-        .iter()
-        .map(|path| {
-            let relative = session
-                .codebase_dir()
-                .and_then(|base| path.strip_prefix(base).ok())
-                .unwrap_or(path);
-            let text = relative
-                .with_extension("")
-                .components()
-                .map(|component| component.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/");
-
-            MapCandidate {
-                haystack: Haystack::new(&text, None, None),
-                name: path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                path: path.clone(),
-            }
         })
         .collect::<Vec<_>>()
 }

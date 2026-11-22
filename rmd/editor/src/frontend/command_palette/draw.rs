@@ -228,7 +228,8 @@ impl CommandPalette {
                     let names = is_opening_maps.then(|| {
                         map_indices
                             .iter()
-                            .map(|&map| maps[map].name.as_str())
+                            .filter_map(|&map| maps[map].path.file_name())
+                            .map(|name| name.to_string_lossy())
                             .collect::<Vec<_>>()
                             .join(", ")
                     });

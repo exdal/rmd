@@ -1,3 +1,5 @@
+pub(crate) mod maps;
+
 const PATH_EXACT_SEGMENT: u32 = 120;
 const PATH_SEGMENT_PREFIX: u32 = 100;
 const PATH_SEGMENT_WORD: u32 = 80;
@@ -63,7 +65,7 @@ pub(crate) fn score(query: &Query, haystack: &Haystack) -> Option<u32> {
         .try_fold(0, |total, token| Some(total + token_score(haystack, token)?))
 }
 
-pub(crate) fn token_score(haystack: &Haystack, token: &str) -> Option<u32> {
+fn token_score(haystack: &Haystack, token: &str) -> Option<u32> {
     [
         path_tier(haystack, token),
         haystack.name.as_deref().and_then(|name| name_tier(name, token)),
@@ -146,3 +148,6 @@ fn name_tier(name: &str, token: &str) -> Option<u32> {
 fn extra_tier(extra: &str, token: &str) -> Option<u32> {
     extra.contains(token).then_some(EXTRA_SUBSTRING)
 }
+
+#[cfg(test)]
+mod tests;

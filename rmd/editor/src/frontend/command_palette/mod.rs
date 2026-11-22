@@ -5,15 +5,16 @@ use dear_imgui_rs::{PopupQueryFlags, Ui};
 use prefab::Prefab;
 
 use self::{
-    candidate::{
-        ActionCandidate, AreaCandidate, MapCandidate, PrefabCandidate, build_actions, build_areas, build_maps,
-        build_prefabs,
-    },
+    candidate::{ActionCandidate, AreaCandidate, PrefabCandidate, build_actions, build_areas, build_prefabs},
     command::Command,
-    matcher::{Query, score, split_arguments, token_score},
 };
 use super::{OpenRequest, ScreenshotRequest, UiState, menu::MenuActions};
 use crate::{
+    fuzzy::{
+        Query,
+        maps::{MapCandidate, build_maps, rank_maps},
+        score, split_arguments,
+    },
     search::SearchQuery,
     session::Session,
     settings::{Settings, keybind::KeybindAction},
@@ -22,7 +23,6 @@ use crate::{
 mod candidate;
 mod command;
 mod draw;
-mod matcher;
 
 const POPUP: &str = "Command palette##command-palette";
 const MAX_RESULTS: usize = 100;
@@ -253,17 +253,7 @@ fn rank_actions(actions: &[ActionCandidate], maps: &[MapCandidate], query: &Quer
 fn resolve_maps(maps: &[MapCandidate], tokens: &[String]) -> Option<Vec<usize>> {
     let mut resolved = Vec::new();
     for token in tokens {
-        let best = maps
-            .iter()
-            .enumerate()
-            .filter_map(|(index, candidate)| Some((index, token_score(&candidate.haystack, token)?)))
-            .max_by(|&(a, a_score), &(b, b_score)| {
-                a_score
-                    .cmp(&b_score)
-                    .then_with(|| maps[b].path.as_os_str().len().cmp(&maps[a].path.as_os_str().len()))
-                    .then_with(|| maps[b].path.cmp(&maps[a].path))
-            })
-            .map(|(index, _)| index)?;
+        let best = *rank_maps(maps, &Query::parse(token)).first()?;
 
         if !resolved.contains(&best) {
             resolved.push(best);

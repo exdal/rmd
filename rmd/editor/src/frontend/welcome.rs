@@ -17,6 +17,10 @@ use crate::{
         panel::{DIAGNOSTIC_WARNING_COLOR, DiagnosticsState},
         session::DiagnosticSeverity,
     },
+    fuzzy::{
+        Query,
+        maps::{build_maps, rank_maps},
+    },
     session::Session,
     settings::Settings,
 };
@@ -114,10 +118,6 @@ fn draw_recent_entry(ui: &Ui, label: &str, id: &str, share: Option<&str>, forget
     }
 
     entry
-}
-
-fn map_matches(base: &Path, map: &Path, needle: &str) -> bool {
-    needle.is_empty() || codebase_relative(base, map).to_ascii_lowercase().contains(needle)
 }
 
 fn share_tooltip(session: &Session, map: &Path) -> Option<&'static str> {
@@ -338,12 +338,8 @@ fn draw_map_filter(ui: &Ui, session: &Session, min_indent: f32, scale: f32, map_
 fn draw_map_list(
     ui: &Ui, session: &Session, base: &Path, map_filter: &str, maps_expanded: &mut bool, out: &mut WelcomeOutput,
 ) {
-    let needle = map_filter.trim().to_ascii_lowercase();
-    let matching = session
-        .maps()
-        .iter()
-        .enumerate()
-        .filter(|(_, map)| map_matches(base, map, &needle));
+    let maps = build_maps(session);
+    let matching = rank_maps(&maps, &Query::parse(map_filter));
     let limit = if *maps_expanded {
         usize::MAX
     } else {
@@ -351,7 +347,8 @@ fn draw_map_list(
     };
 
     let mut shown = 0;
-    for (index, map) in matching.clone().take(limit) {
+    for &index in matching.iter().take(limit) {
+        let map = &maps[index].path;
         shown += 1;
         let entry = draw_recent_entry(
             ui,
@@ -372,7 +369,7 @@ fn draw_map_list(
     if shown == 0 && !session.maps().is_empty() {
         ui.text_disabled("No maps match the filter");
     }
-    let hidden = matching.count().saturating_sub(shown);
+    let hidden = matching.len().saturating_sub(shown);
     if hidden > 0 {
         if ui.text_link(format!("Show more... ({hidden})")) {
             *maps_expanded = true;
@@ -386,7 +383,7 @@ fn draw_map_list(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{codebase_relative, map_matches};
+    use super::codebase_relative;
 
     #[test]
     fn a_map_reads_as_its_path_inside_the_codebase() {
@@ -397,27 +394,6 @@ mod tests {
             codebase_relative(base, &map),
             Path::new("_maps/map_files/station.dmm").display().to_string()
         );
-    }
-
-    #[test]
-    fn the_map_filter_matches_any_part_of_the_codebase_relative_path() {
-        let base = Path::new("/tg");
-        let map = Path::new("/tg/_maps/map_files/MetaStation/MetaStation.dmm");
-
-        assert!(map_matches(base, map, ""), "an empty filter keeps everything");
-        assert!(map_matches(base, map, "metastation"), "matching ignores case");
-        assert!(map_matches(base, map, "map_files"), "a directory segment matches");
-        assert!(!map_matches(base, map, "deltastation"));
-    }
-
-    #[test]
-    fn the_map_filter_does_not_match_the_codebase_directory_itself() {
-        // The label is relative, so a codebase living under a directory called "maps" must not make
-        // every one of its maps match the word.
-        let base = Path::new("/home/maps/tg");
-        let map = Path::new("/home/maps/tg/station.dmm");
-
-        assert!(!map_matches(base, map, "home"));
     }
 
     #[test]

@@ -20,6 +20,7 @@ mod environment;
 mod focus;
 mod frame;
 mod frontend;
+mod fuzzy;
 mod git;
 mod gizmo;
 mod inspector;
