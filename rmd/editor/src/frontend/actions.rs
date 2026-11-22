@@ -20,6 +20,11 @@ impl UiState {
             settings.panels = OpenPanels::default();
         }
 
+        if let Some(panel) = menu.show_panel {
+            *settings.panels.get_mut(panel) = true;
+            self.focus_panel(panel);
+        }
+
         let Some(panel) = menu.toggle_panel else {
             return;
         };
@@ -30,6 +35,10 @@ impl UiState {
             return;
         }
 
+        self.focus_panel(panel);
+    }
+
+    fn focus_panel(&mut self, panel: Panel) {
         match panel {
             Panel::ObjectTree => self.select_object_tree = StartupPanelFocus::new(),
             Panel::Git => self.git_panel.focus(),

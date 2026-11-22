@@ -49,6 +49,7 @@ pub(super) struct MenuActions {
     pub(super) resize_map: bool,
     pub(super) reset_layout: bool,
     pub(super) toggle_panel: Option<Panel>,
+    pub(super) show_panel: Option<Panel>,
     pub(super) toggle_dm_ui: bool,
     pub(super) coop_dialog: Option<CoopDialogKind>,
 }

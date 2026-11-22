@@ -1,5 +1,5 @@
 use base::{path::TreePath, types::Value};
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf};
 
 use dear_imgui_rs::Key;
 use dmm::{Map, Size};
@@ -8,7 +8,8 @@ use prefab::Prefab;
 use ui::testing::CONTEXT_LOCK;
 
 use super::{
-    CommandPalette,
+    Choice, CommandPalette, Mode,
+    command::Command,
     matcher::{Haystack, Query, score},
 };
 use crate::{environment::worker::LoadedMap, frontend::fixtures::RectangleUiHarness, session::Session, tool::Tool};
@@ -83,6 +84,7 @@ fn session_with(tiles: Vec<Vec<Prefab>>) -> Session {
 fn prefabs(session: &Session, query: &str) -> (CommandPalette, Vec<(String, u32)>) {
     let mut palette = CommandPalette::new(session);
     palette.rank(query);
+    assert_eq!(palette.mode, Mode::Prefabs);
     let listed = palette
         .results
         .iter()
@@ -145,7 +147,16 @@ fn var_edited_map_prefabs_are_listed_with_their_own_counts() {
     let (palette, listed) = prefabs(&session, "rusty");
 
     assert_eq!(listed, [("/obj/structure/table".to_owned(), 2)]);
-    assert_eq!(palette.choice(0), Some(rusty));
+    assert_eq!(palette.choice(0), Some(Choice::Prefab(rusty)));
+}
+
+#[test]
+fn every_command_has_a_unique_label() {
+    let labels = Command::all().into_iter().map(Command::label).collect::<Vec<_>>();
+    let unique = labels.iter().collect::<HashSet<_>>();
+
+    assert!(labels.iter().all(|label| !label.is_empty()), "{labels:?}");
+    assert_eq!(unique.len(), labels.len(), "{labels:?}");
 }
 
 fn press_ctrl_p(app: &mut RectangleUiHarness) {
@@ -198,6 +209,19 @@ fn choosing_a_prefab_sets_it_and_switches_to_place() {
     assert_eq!(app.session.palette(), Some(&prefab("/turf/open/floor")));
     assert_eq!(app.session.tool(), Tool::Place);
     assert!(app.state.command_palette.is_none());
+}
+
+#[test]
+fn an_action_runs_through_the_frame_menu_actions() {
+    let _guard = CONTEXT_LOCK.lock().unwrap();
+    let mut app = RectangleUiHarness::new();
+    let before = app.session.options.show_lighting;
+    open(&mut app);
+    type_text(&mut app, ">lighting");
+
+    tap(&mut app, Key::Enter);
+
+    assert_ne!(app.session.options.show_lighting, before);
 }
 
 #[test]

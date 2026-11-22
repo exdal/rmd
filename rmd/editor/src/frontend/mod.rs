@@ -97,6 +97,19 @@ pub(crate) const LAYER_KEYS: [(KeybindAction, TypeLayer); 4] = [
     (KeybindAction::ToggleMobLayer, TypeLayer::Mob),
 ];
 
+pub(crate) const TOOL_KEYS: [(KeybindAction, Tool); 10] = [
+    (KeybindAction::PlaceTool, Tool::Place),
+    (KeybindAction::PickTool, Tool::Pick),
+    (KeybindAction::MoveTool, Tool::Move),
+    (KeybindAction::NodeTool, Tool::Node),
+    (KeybindAction::SelectTool, Tool::Select),
+    (KeybindAction::DeleteTool, Tool::Delete),
+    (KeybindAction::ReplaceTool, Tool::Replace),
+    (KeybindAction::FillTool, Tool::Fill),
+    (KeybindAction::RectFillTool, Tool::RectFill),
+    (KeybindAction::CommentTool, Tool::Comment),
+];
+
 const SCREENSHOT_KEYS: [(KeybindAction, ScreenshotArea, bool); 4] = [
     (KeybindAction::ScreenshotMap, ScreenshotArea::Map, false),
     (KeybindAction::ScreenshotSelection, ScreenshotArea::Selection, false),
@@ -472,7 +485,7 @@ impl UiState {
         }
 
         let mut menu = self.draw_menu_bar(ui, session, settings, loading);
-        self.draw_command_palette(ui, session, settings, loading, &menu);
+        self.draw_command_palette(ui, session, settings, loading, &mut menu);
         self.read_edit_keys(ui, session, settings, &mut menu);
         self.apply_window_actions(settings, &menu);
         settings.mirror_camera ^= menu.toggle_mirror_camera;

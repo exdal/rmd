@@ -46,6 +46,10 @@ impl Haystack {
             extra: extra.map(str::to_lowercase),
         }
     }
+
+    pub(crate) fn label(label: &str) -> Self {
+        Self::new("", Some(label), None)
+    }
 }
 
 pub(crate) fn score(query: &Query, haystack: &Haystack) -> Option<u32> {

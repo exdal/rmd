@@ -3,24 +3,11 @@ use ui::keybind::KeyBinding;
 
 use super::ViewFrame;
 use crate::{
-    frontend::{LAYER_KEYS, UiState},
+    frontend::{LAYER_KEYS, TOOL_KEYS, UiState},
     session::Session,
     settings::{Settings, keybind::KeybindAction},
     tool::{Tool, panel::request_level_change},
 };
-
-const TOOL_KEYS: [(KeybindAction, Tool); 10] = [
-    (KeybindAction::PlaceTool, Tool::Place),
-    (KeybindAction::PickTool, Tool::Pick),
-    (KeybindAction::MoveTool, Tool::Move),
-    (KeybindAction::NodeTool, Tool::Node),
-    (KeybindAction::SelectTool, Tool::Select),
-    (KeybindAction::DeleteTool, Tool::Delete),
-    (KeybindAction::ReplaceTool, Tool::Replace),
-    (KeybindAction::FillTool, Tool::Fill),
-    (KeybindAction::RectFillTool, Tool::RectFill),
-    (KeybindAction::CommentTool, Tool::Comment),
-];
 
 /// aka Alternate tool
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

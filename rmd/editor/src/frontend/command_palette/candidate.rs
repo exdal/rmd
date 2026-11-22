@@ -4,7 +4,7 @@ use base::path::TreePath;
 use objtree::ObjectTree;
 use prefab::{Prefab, prefabs_equal};
 
-use super::matcher::Haystack;
+use super::{command::Command, matcher::Haystack};
 use crate::{
     palette::panel::prefab_menu::override_lines,
     session::Session,
@@ -25,6 +25,11 @@ pub(super) struct PrefabCandidate {
     pub(super) count: u32,
     pub(super) recent_rank: Option<usize>,
     pub(super) thumbnail: Thumbnail,
+}
+
+pub(super) struct ActionCandidate {
+    pub(super) command: Command,
+    pub(super) haystack: Haystack,
 }
 
 fn edited_candidate(tree: &ObjectTree, prefab: &Prefab, count: u32) -> Option<PrefabCandidate> {
@@ -96,4 +101,15 @@ pub(super) fn build_prefabs(session: &Session, placed: &[(Prefab, u32)]) -> Vec<
     }
 
     prefabs
+}
+
+pub(super) fn build_actions(session: &Session) -> Vec<ActionCandidate> {
+    Command::all()
+        .into_iter()
+        .filter(|command| command.is_enabled(session))
+        .map(|command| ActionCandidate {
+            haystack: Haystack::label(command.label()),
+            command,
+        })
+        .collect::<Vec<_>>()
 }

@@ -4,8 +4,8 @@ use dear_imgui_rs::{Condition, Key, StyleColor, Ui, sys};
 use ui::widgets::dpi;
 
 use super::{
-    CommandPalette, Outcome, POPUP,
-    candidate::{PrefabCandidate, Thumbnail},
+    CommandPalette, Mode, Outcome, POPUP,
+    candidate::{ActionCandidate, PrefabCandidate, Thumbnail},
 };
 use crate::{
     palette::panel::thumbnail::draw_placement,
@@ -18,7 +18,7 @@ const TOP_OFFSET: f32 = 40.0;
 const THUMBNAIL: f32 = 32.0;
 const VISIBLE_ROWS: usize = 12;
 const INPUT_ID: &str = "##command-palette-input";
-const HINT: &str = "Search atoms";
+const HINT: &str = "Search atoms  (> actions)";
 
 struct RowFrame {
     min: [f32; 2],
@@ -33,8 +33,14 @@ struct RowFrame {
 }
 
 impl RowFrame {
-    fn left(&self) -> f32 {
-        self.min[0] + self.padding + self.thumbnail + self.spacing
+    fn left(&self, has_thumbnail: bool) -> f32 {
+        let thumbnail = if has_thumbnail {
+            self.thumbnail + self.spacing
+        } else {
+            0.0
+        };
+
+        self.min[0] + self.padding + thumbnail
     }
 
     fn draw_text(&self, ui: &Ui, left: f32, lines: &[(&str, [f32; 4])], right: Option<&str>) {
@@ -120,7 +126,7 @@ impl CommandPalette {
             let clicked = ui
                 .child_window("##command-results")
                 .size([inner_width, height])
-                .build(ui, || self.draw_rows(ui, session, row_height))
+                .build(ui, || self.draw_rows(ui, session, settings, row_height))
                 .flatten();
             chosen = clicked.or(chosen);
         }
@@ -128,10 +134,10 @@ impl CommandPalette {
         self.is_scroll_pending = false;
 
         match chosen.and_then(|row| self.choice(row)) {
-            Some(prefab) => {
+            Some(choice) => {
                 ui.close_current_popup();
 
-                Outcome::Choose(prefab)
+                Outcome::Choose(choice)
             },
             None => Outcome::Open,
         }
@@ -161,9 +167,11 @@ impl CommandPalette {
         }
     }
 
-    fn draw_rows(&mut self, ui: &Ui, session: &mut Session, height: f32) -> Option<usize> {
+    fn draw_rows(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, height: f32) -> Option<usize> {
         let Self {
             prefabs,
+            actions,
+            mode,
             results,
             selected,
             is_scroll_pending,
@@ -208,7 +216,10 @@ impl CommandPalette {
                 text: ui.style_color(StyleColor::Text),
                 dim: ui.style_color(StyleColor::TextDisabled),
             };
-            draw_prefab(ui, session, &mut prefabs[index], &frame);
+            match mode {
+                Mode::Prefabs => draw_prefab(ui, session, &mut prefabs[index], &frame),
+                Mode::Actions => draw_action(ui, settings, &actions[index], &frame),
+            }
         }
 
         clicked
@@ -236,5 +247,19 @@ fn draw_prefab(ui: &Ui, session: &mut Session, candidate: &mut PrefabCandidate, 
         lines.push((candidate.details.as_str(), frame.dim));
     }
 
-    frame.draw_text(ui, frame.left(), &lines, count.as_deref());
+    frame.draw_text(ui, frame.left(true), &lines, count.as_deref());
+}
+
+fn draw_action(ui: &Ui, settings: &Settings, candidate: &ActionCandidate, frame: &RowFrame) {
+    let keybind = candidate
+        .command
+        .keybind()
+        .map(|action| settings.keybindings.get(action).label(ui));
+
+    frame.draw_text(
+        ui,
+        frame.left(false),
+        &[(candidate.command.label(), frame.text)],
+        keybind.as_deref(),
+    );
 }

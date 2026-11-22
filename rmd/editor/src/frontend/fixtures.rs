@@ -98,10 +98,12 @@ impl RectangleUiHarness {
         }
         let mut menu = MenuActions::default();
         self.state
-            .draw_command_palette(ui, &mut self.session, &self.settings, false, &menu);
+            .draw_command_palette(ui, &mut self.session, &self.settings, false, &mut menu);
         self.state.read_edit_keys(ui, &self.session, &self.settings, &mut menu);
         self.state.edit_command = self.state.edit_command.or(menu.edit);
         self.state.apply_history_actions(&mut self.session, &menu);
+        self.state
+            .apply_view_toggles(&mut self.session, &mut self.settings, &menu);
         if self.is_modal_open {
             if !ui.is_popup_open("test-modal") {
                 ui.open_popup("test-modal");

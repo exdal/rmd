@@ -2,32 +2,48 @@ use dear_imgui_rs::{PopupQueryFlags, Ui};
 use prefab::Prefab;
 
 use self::{
-    candidate::{PrefabCandidate, build_prefabs},
+    candidate::{ActionCandidate, PrefabCandidate, build_actions, build_prefabs},
+    command::Command,
     matcher::{Query, score},
 };
-use super::{UiState, menu::MenuActions};
+use super::{OpenRequest, ScreenshotRequest, UiState, menu::MenuActions};
 use crate::{
     session::Session,
     settings::{Settings, keybind::KeybindAction},
 };
 
 mod candidate;
+mod command;
 mod draw;
 mod matcher;
 
 const POPUP: &str = "Command palette##command-palette";
 const MAX_RESULTS: usize = 100;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Prefabs,
+    Actions,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Choice {
+    Prefab(Prefab),
+    Command(Command),
+}
+
 enum Outcome {
     Open,
     Close,
-    Choose(Prefab),
+    Choose(Choice),
 }
 
 pub(crate) struct CommandPalette {
     prefabs: Vec<PrefabCandidate>,
+    actions: Vec<ActionCandidate>,
     query: String,
     ranked: Option<String>,
+    mode: Mode,
     results: Vec<usize>,
     selected: usize,
     is_scroll_pending: bool,
@@ -42,8 +58,10 @@ impl CommandPalette {
             .unwrap_or_default();
         let mut palette = Self {
             prefabs: build_prefabs(session, &placed),
+            actions: build_actions(session),
             query: String::new(),
             ranked: None,
+            mode: Mode::Prefabs,
             results: Vec::new(),
             selected: 0,
             is_scroll_pending: false,
@@ -62,14 +80,31 @@ impl CommandPalette {
         self.selected = 0;
         self.is_scroll_pending = true;
 
-        self.results = rank_prefabs(&self.prefabs, &Query::parse(query));
+        let (mode, text) = split_mode(query);
+        let query = Query::parse(text);
+        self.mode = mode;
+        self.results = match mode {
+            Mode::Prefabs => rank_prefabs(&self.prefabs, &query),
+            Mode::Actions => rank_actions(&self.actions, &query),
+        };
         self.results.truncate(MAX_RESULTS);
     }
 
-    fn choice(&self, row: usize) -> Option<Prefab> {
+    fn choice(&self, row: usize) -> Option<Choice> {
         let index = *self.results.get(row)?;
 
-        Some(self.prefabs[index].prefab.clone())
+        Some(match self.mode {
+            Mode::Prefabs => Choice::Prefab(self.prefabs[index].prefab.clone()),
+            Mode::Actions => Choice::Command(self.actions[index].command),
+        })
+    }
+}
+
+fn split_mode(query: &str) -> (Mode, &str) {
+    if let Some(rest) = query.strip_prefix('>') {
+        (Mode::Actions, rest.trim_start())
+    } else {
+        (Mode::Prefabs, query)
     }
 }
 
@@ -121,9 +156,28 @@ fn rank_prefabs(prefabs: &[PrefabCandidate], query: &Query) -> Vec<usize> {
     scored.into_iter().map(|(index, _)| index).collect::<Vec<_>>()
 }
 
+fn rank_actions(actions: &[ActionCandidate], query: &Query) -> Vec<usize> {
+    if query.is_empty() {
+        return (0..actions.len()).collect::<Vec<_>>();
+    }
+
+    let mut scored = actions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| Some((index, score(query, &candidate.haystack)?)))
+        .collect::<Vec<_>>();
+    scored.sort_by(|&(a, a_score), &(b, b_score)| {
+        b_score
+            .cmp(&a_score)
+            .then_with(|| actions[a].command.label().cmp(actions[b].command.label()))
+    });
+
+    scored.into_iter().map(|(index, _)| index).collect::<Vec<_>>()
+}
+
 impl UiState {
     pub(super) fn draw_command_palette(
-        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, loading: bool, menu: &MenuActions,
+        &mut self, ui: &Ui, session: &mut Session, settings: &Settings, loading: bool, menu: &mut MenuActions,
     ) {
         let is_key_open = settings.keybindings.get(KeybindAction::CommandPalette).is_pressed(ui)
             && !ui.io().want_text_input()
@@ -146,10 +200,58 @@ impl UiState {
         match palette.draw(ui, session, settings) {
             Outcome::Open => {},
             Outcome::Close => self.command_palette = None,
-            Outcome::Choose(prefab) => {
+            Outcome::Choose(choice) => {
                 self.command_palette = None;
-                session.choose_prefab(prefab);
+                self.apply_choice(session, menu, choice);
             },
+        }
+    }
+
+    fn apply_choice(&mut self, session: &mut Session, menu: &mut MenuActions, choice: Choice) {
+        match choice {
+            Choice::Prefab(prefab) => session.choose_prefab(prefab),
+            Choice::Command(command) => self.apply_command(session, menu, command),
+        }
+    }
+
+    fn apply_command(&mut self, session: &mut Session, menu: &mut MenuActions, command: Command) {
+        match command {
+            Command::Tool(tool) => session.set_tool(tool),
+            Command::Layer(layer) => {
+                session.toggle_layer(layer);
+            },
+            Command::ShowAllLayers => {
+                session.show_all_types();
+            },
+            Command::Save => self.save_requested = true,
+            Command::Settings => self.settings_window.open(),
+            Command::Screenshot { area, copy } => menu.screenshot = Some(ScreenshotRequest { area, copy }),
+            Command::Edit(edit) => menu.edit = Some(edit),
+            Command::ShowPanel(panel) => menu.show_panel = Some(panel),
+            Command::SaveAll => menu.save_all = true,
+            Command::CloseMap => menu.close_map = true,
+            Command::CloseAll => menu.close_all = true,
+            Command::Undo => menu.undo = true,
+            Command::Redo => menu.redo = true,
+            Command::Find => menu.search = true,
+            Command::GoTo => menu.go_to = true,
+            Command::ResizeMap => menu.resize_map = true,
+            Command::NewMap => menu.new_map = true,
+            Command::OpenMap => menu.open = Some(OpenRequest::PickMap),
+            Command::OpenCodebase => menu.open = Some(OpenRequest::PickCodebase),
+            Command::ToggleAreas => menu.toggle_areas = true,
+            Command::ToggleAreaOutlines => menu.toggle_area_outlines = true,
+            Command::ToggleLighting => menu.toggle_lighting = true,
+            Command::ToggleTileGrid => menu.toggle_tile_grid = true,
+            Command::TogglePixelGrid => menu.toggle_pixel_grid = true,
+            Command::ToggleMirrorCamera => menu.toggle_mirror_camera = true,
+            Command::LevelUp => menu.level_delta += 1,
+            Command::LevelDown => menu.level_delta -= 1,
+            Command::Refit => menu.refit = true,
+            Command::ToggleDmUi => menu.toggle_dm_ui = true,
+            Command::ResetLayout => menu.reset_layout = true,
+            Command::Welcome => menu.show_welcome = true,
+            Command::About => menu.show_about = true,
         }
     }
 }
