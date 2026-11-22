@@ -5,7 +5,7 @@ use ui::widgets::dpi;
 
 use super::{
     CommandPalette, Mode, Outcome, POPUP,
-    candidate::{ActionCandidate, PrefabCandidate, Thumbnail},
+    candidate::{ActionCandidate, AreaCandidate, PrefabCandidate, Thumbnail},
 };
 use crate::{
     palette::panel::thumbnail::draw_placement,
@@ -18,7 +18,7 @@ const TOP_OFFSET: f32 = 40.0;
 const THUMBNAIL: f32 = 32.0;
 const VISIBLE_ROWS: usize = 12;
 const INPUT_ID: &str = "##command-palette-input";
-const HINT: &str = "Search atoms  (> actions)";
+const HINT: &str = "Search atoms  (> actions, @ areas)";
 
 struct RowFrame {
     min: [f32; 2],
@@ -170,6 +170,7 @@ impl CommandPalette {
     fn draw_rows(&mut self, ui: &Ui, session: &mut Session, settings: &Settings, height: f32) -> Option<usize> {
         let Self {
             prefabs,
+            areas,
             actions,
             mode,
             results,
@@ -219,6 +220,7 @@ impl CommandPalette {
             match mode {
                 Mode::Prefabs => draw_prefab(ui, session, &mut prefabs[index], &frame),
                 Mode::Actions => draw_action(ui, settings, &actions[index], &frame),
+                Mode::Areas => draw_area(ui, &areas[index], &frame),
             }
         }
 
@@ -261,5 +263,19 @@ fn draw_action(ui: &Ui, settings: &Settings, candidate: &ActionCandidate, frame:
         frame.left(false),
         &[(candidate.command.label(), frame.text)],
         keybind.as_deref(),
+    );
+}
+
+fn draw_area(ui: &Ui, candidate: &AreaCandidate, frame: &RowFrame) {
+    let tiles = format!("{} tiles", candidate.count);
+
+    frame.draw_text(
+        ui,
+        frame.left(false),
+        &[
+            (candidate.name.as_str(), frame.text),
+            (candidate.path.as_str(), frame.dim),
+        ],
+        Some(&tiles),
     );
 }

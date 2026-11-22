@@ -1,4 +1,4 @@
-use base::{path::TreePath, types::Value};
+use base::{coord::Coord, path::TreePath, types::Value};
 use std::{collections::HashSet, path::PathBuf};
 
 use dear_imgui_rs::Key;
@@ -11,6 +11,7 @@ use super::{
     Choice, CommandPalette, Mode,
     command::Command,
     matcher::{Haystack, Query, score},
+    representative_tile,
 };
 use crate::{environment::worker::LoadedMap, frontend::fixtures::RectangleUiHarness, session::Session, tool::Tool};
 
@@ -42,6 +43,14 @@ fn names_and_overrides_match_when_the_path_does_not() {
 
     assert_eq!(score(&Query::parse("weld"), &haystack), Some(70));
     assert_eq!(score(&Query::parse("rusty"), &haystack), Some(30));
+}
+
+#[test]
+fn representative_tile_is_on_the_busiest_level_nearest_its_center() {
+    let coords =
+        [(1, 1, 2), (1, 1, 1), (2, 1, 1), (3, 1, 1), (4, 1, 1), (9, 1, 1)].map(|(x, y, z)| Coord::new(x, y, z));
+
+    assert_eq!(representative_tile(&coords), Some(4));
 }
 
 fn prefab(path: &str) -> Prefab {
@@ -222,6 +231,31 @@ fn an_action_runs_through_the_frame_menu_actions() {
     tap(&mut app, Key::Enter);
 
     assert_ne!(app.session.options.show_lighting, before);
+}
+
+#[test]
+fn choosing_an_area_centers_the_view_and_leaves_the_selection_alone() {
+    let _guard = CONTEXT_LOCK.lock().unwrap();
+    let mut app = RectangleUiHarness::new();
+    let turf = app.session.turf_at(app.id, Coord::new(1, 1, 1)).unwrap();
+    app.session
+        .state
+        .document_mut(app.id)
+        .unwrap()
+        .pick_instance(Some(turf));
+    open(&mut app);
+    type_text(&mut app, "@");
+
+    tap(&mut app, Key::Enter);
+
+    let document = app.session.state.document(app.id).unwrap();
+    assert_eq!(document.picked_instance(), Some(turf));
+    let view = app.state.map_views.get(&app.id).unwrap();
+    let tile_size = app.session.options.tile_size as f32;
+    assert_eq!(
+        (view.camera.camera.x, view.camera.camera.y),
+        (9.5 * tile_size, 9.5 * tile_size)
+    );
 }
 
 #[test]

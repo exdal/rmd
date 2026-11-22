@@ -1,13 +1,17 @@
+use std::{cmp::Reverse, collections::BTreeMap};
+
+use base::coord::Coord;
 use dear_imgui_rs::{PopupQueryFlags, Ui};
 use prefab::Prefab;
 
 use self::{
-    candidate::{ActionCandidate, PrefabCandidate, build_actions, build_prefabs},
+    candidate::{ActionCandidate, AreaCandidate, PrefabCandidate, build_actions, build_areas, build_prefabs},
     command::Command,
     matcher::{Query, score},
 };
 use super::{OpenRequest, ScreenshotRequest, UiState, menu::MenuActions};
 use crate::{
+    search::SearchQuery,
     session::Session,
     settings::{Settings, keybind::KeybindAction},
 };
@@ -24,12 +28,14 @@ const MAX_RESULTS: usize = 100;
 enum Mode {
     Prefabs,
     Actions,
+    Areas,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum Choice {
     Prefab(Prefab),
     Command(Command),
+    Area(Prefab),
 }
 
 enum Outcome {
@@ -40,6 +46,7 @@ enum Outcome {
 
 pub(crate) struct CommandPalette {
     prefabs: Vec<PrefabCandidate>,
+    areas: Vec<AreaCandidate>,
     actions: Vec<ActionCandidate>,
     query: String,
     ranked: Option<String>,
@@ -58,6 +65,7 @@ impl CommandPalette {
             .unwrap_or_default();
         let mut palette = Self {
             prefabs: build_prefabs(session, &placed),
+            areas: build_areas(session, &placed),
             actions: build_actions(session),
             query: String::new(),
             ranked: None,
@@ -86,6 +94,7 @@ impl CommandPalette {
         self.results = match mode {
             Mode::Prefabs => rank_prefabs(&self.prefabs, &query),
             Mode::Actions => rank_actions(&self.actions, &query),
+            Mode::Areas => rank_areas(&self.areas, &query),
         };
         self.results.truncate(MAX_RESULTS);
     }
@@ -96,6 +105,7 @@ impl CommandPalette {
         Some(match self.mode {
             Mode::Prefabs => Choice::Prefab(self.prefabs[index].prefab.clone()),
             Mode::Actions => Choice::Command(self.actions[index].command),
+            Mode::Areas => Choice::Area(self.areas[index].prefab.clone()),
         })
     }
 }
@@ -103,6 +113,8 @@ impl CommandPalette {
 fn split_mode(query: &str) -> (Mode, &str) {
     if let Some(rest) = query.strip_prefix('>') {
         (Mode::Actions, rest.trim_start())
+    } else if let Some(rest) = query.strip_prefix('@') {
+        (Mode::Areas, rest.trim_start())
     } else {
         (Mode::Prefabs, query)
     }
@@ -152,6 +164,25 @@ fn rank_prefabs(prefabs: &[PrefabCandidate], query: &Query) -> Vec<usize> {
             .then_with(|| a.path.len().cmp(&b.path.len()))
             .then_with(|| a.path.cmp(&b.path))
     });
+
+    scored.into_iter().map(|(index, _)| index).collect::<Vec<_>>()
+}
+
+fn rank_areas(areas: &[AreaCandidate], query: &Query) -> Vec<usize> {
+    if query.is_empty() {
+        let mut all = (0..areas.len()).collect::<Vec<_>>();
+        all.sort_by(|&a, &b| areas[a].name.cmp(&areas[b].name));
+
+        return all;
+    }
+
+    let mut scored = areas
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| Some((index, score(query, &candidate.haystack)?)))
+        .collect::<Vec<_>>();
+    scored
+        .sort_by(|&(a, a_score), &(b, b_score)| b_score.cmp(&a_score).then_with(|| areas[a].name.cmp(&areas[b].name)));
 
     scored.into_iter().map(|(index, _)| index).collect::<Vec<_>>()
 }
@@ -211,6 +242,7 @@ impl UiState {
         match choice {
             Choice::Prefab(prefab) => session.choose_prefab(prefab),
             Choice::Command(command) => self.apply_command(session, menu, command),
+            Choice::Area(prefab) => self.jump_to_area(session, prefab),
         }
     }
 
@@ -254,6 +286,47 @@ impl UiState {
             Command::About => menu.show_about = true,
         }
     }
+
+    fn jump_to_area(&mut self, session: &mut Session, prefab: Prefab) {
+        let Some(document) = session.state.active() else {
+            return;
+        };
+
+        let coords = session
+            .find_instances(document, &SearchQuery::Prefab(prefab), None)
+            .into_iter()
+            .filter_map(|instance| Some(session.state.document(document)?.instance_location(instance)?.coord))
+            .collect::<Vec<_>>();
+        let Some(index) = representative_tile(&coords) else {
+            return;
+        };
+
+        self.cancel_edit_gestures(session, Some(document));
+        self.center_view_on(session, document, coords[index]);
+    }
+}
+
+pub(crate) fn representative_tile(coords: &[Coord]) -> Option<usize> {
+    let mut counts = BTreeMap::<u32, usize>::new();
+    for coord in coords {
+        *counts.entry(coord.z).or_default() += 1;
+    }
+
+    let (&z, _) = counts.iter().max_by_key(|&(&z, &count)| (count, Reverse(z)))?;
+
+    let on_level = coords.iter().filter(|coord| coord.z == z);
+    let count = on_level.clone().count() as f64;
+    let center_x = on_level.clone().map(|coord| f64::from(coord.x)).sum::<f64>() / count;
+    let center_y = on_level.map(|coord| f64::from(coord.y)).sum::<f64>() / count;
+
+    let distance = |coord: &Coord| (f64::from(coord.x) - center_x).powi(2) + (f64::from(coord.y) - center_y).powi(2);
+
+    coords
+        .iter()
+        .enumerate()
+        .filter(|(_, coord)| coord.z == z)
+        .min_by(|(_, a), (_, b)| distance(a).total_cmp(&distance(b)))
+        .map(|(index, _)| index)
 }
 
 #[cfg(test)]

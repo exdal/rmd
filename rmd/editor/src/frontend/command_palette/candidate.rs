@@ -27,6 +27,14 @@ pub(super) struct PrefabCandidate {
     pub(super) thumbnail: Thumbnail,
 }
 
+pub(super) struct AreaCandidate {
+    pub(super) prefab: Prefab,
+    pub(super) name: String,
+    pub(super) path: String,
+    pub(super) haystack: Haystack,
+    pub(super) count: u32,
+}
+
 pub(super) struct ActionCandidate {
     pub(super) command: Command,
     pub(super) haystack: Haystack,
@@ -101,6 +109,33 @@ pub(super) fn build_prefabs(session: &Session, placed: &[(Prefab, u32)]) -> Vec<
     }
 
     prefabs
+}
+
+pub(super) fn build_areas(session: &Session, placed: &[(Prefab, u32)]) -> Vec<AreaCandidate> {
+    let Some(tree) = session.tree() else {
+        return Vec::new();
+    };
+
+    let Some(root) = tree.roots().area else {
+        return Vec::new();
+    };
+
+    placed
+        .iter()
+        .filter_map(|(prefab, count)| {
+            tree.id_of(&prefab.path).filter(|id| tree.is_subtype_of(*id, root))?;
+            let path = prefab.path.to_string();
+            let name = display_name(Some(tree), prefab);
+
+            Some(AreaCandidate {
+                haystack: Haystack::new(&path, Some(&name), None),
+                prefab: prefab.clone(),
+                name,
+                path,
+                count: *count,
+            })
+        })
+        .collect::<Vec<_>>()
 }
 
 pub(super) fn build_actions(session: &Session) -> Vec<ActionCandidate> {
