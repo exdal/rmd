@@ -1,7 +1,7 @@
 use std::{collections::HashSet, hash::Hash};
 
 use dear_imgui_rs::{
-    Condition, Key, ModalPopupToken, StyleColor, TableFlags, Ui, WindowFlags, WindowHoveredFlags, sys,
+    Condition, Key, ModalPopupToken, PopupQueryFlags, StyleColor, TableFlags, Ui, WindowFlags, WindowHoveredFlags, sys,
 };
 
 pub struct RowSelection<K> {
@@ -323,8 +323,10 @@ pub const fn opaque(color: [f32; 3]) -> [f32; 4] {
 }
 
 pub fn focus_window_on_hover(ui: &Ui) {
+    // THIS IS BILLIONTH TIME I AM FIXING THE IMGUI HOVERING BEHAVIOR, IF THIS SHIT CONTINUES WE WILL MOVE TO EGUI MY GODDDDDDDDDDDDD
     if !ui.is_window_focused()
         && !ui.is_any_item_active()
+        && !ui.is_popup_open_with_flags("", PopupQueryFlags::ANY_POPUP)
         && ui.is_window_hovered_with_flags(WindowHoveredFlags::CHILD_WINDOWS | WindowHoveredFlags::NO_POPUP_HIERARCHY)
     {
         ui.set_window_focus(None);
@@ -621,6 +623,50 @@ mod tests {
         let (_, popup_open) = draw_hover_focus_test_window(ui, false);
         draw_hover_focus_holder(ui);
         assert!(popup_open, "hovering a popup should not refocus its parent window");
+        assert!(context.render_legacy().valid());
+    }
+
+    fn draw_root_popup(ui: &Ui, open: bool) -> bool {
+        if open {
+            ui.open_popup("hover-focus-root-popup");
+        }
+
+        unsafe {
+            sys::igSetNextWindowPos(
+                sys::ImVec2 { x: 400.0, y: 300.0 },
+                Condition::Always as i32,
+                sys::ImVec2 { x: 0.0, y: 0.0 },
+            );
+        }
+        ui.begin_popup("hover-focus-root-popup").is_some()
+    }
+
+    #[test]
+    fn hover_focus_keeps_a_popup_opened_earlier_in_the_frame() {
+        let _guard = CONTEXT_LOCK.lock().unwrap();
+        let mut context = rectangle_context();
+        context.io_mut().add_mouse_pos_event([100.0, 100.0]);
+
+        let ui = context.frame();
+        draw_hover_focus_test_window(ui, false);
+        draw_hover_focus_holder(ui);
+        ui.set_window_focus(Some("hover-focus-holder"));
+        assert!(context.render_legacy().valid());
+
+        let ui = context.frame();
+        assert!(draw_root_popup(ui, true));
+        let (focused, _) = draw_hover_focus_test_window(ui, false);
+        draw_hover_focus_holder(ui);
+        assert!(
+            !focused,
+            "a hovered window must not take focus from a popup that just opened"
+        );
+        assert!(context.render_legacy().valid());
+
+        let ui = context.frame();
+        assert!(draw_root_popup(ui, false), "the popup survives the hover");
+        draw_hover_focus_test_window(ui, false);
+        draw_hover_focus_holder(ui);
         assert!(context.render_legacy().valid());
     }
 }
