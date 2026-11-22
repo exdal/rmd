@@ -13,7 +13,6 @@ use crate::{
     },
     session::Session,
     settings::{Panel, Settings, keybind::KeybindAction},
-    tool::Tool,
     viewport::panel::edit::EditCommand,
 };
 
@@ -263,41 +262,18 @@ fn draw_edit_menu(ui: &Ui, session: &Session, settings: &Settings, actions: &mut
     }
 
     ui.separator();
-    let selected = session.selection().is_some();
-    let is_picking = session.tool() == Tool::Pick && session.picked_instance().is_some();
-    let is_stash = session.is_stash_active();
-    for (label, action, command, enabled) in [
-        ("Copy", KeybindAction::Copy, EditCommand::Copy, selected || is_picking),
-        (
-            "Cut",
-            KeybindAction::Cut,
-            EditCommand::Cut,
-            (selected || is_picking) && !is_stash,
-        ),
-        (
-            "Paste",
-            KeybindAction::Paste,
-            EditCommand::Paste,
-            session.clipboard().is_some() && !is_stash,
-        ),
-        (
-            "Delete",
-            KeybindAction::Delete,
-            EditCommand::Delete,
-            (selected || session.picked_instance().is_some()) && !is_stash,
-        ),
-        (
-            "Deselect",
-            KeybindAction::Deselect,
-            EditCommand::Deselect,
-            selected || session.picked_instance().is_some(),
-        ),
+    for (label, action, command) in [
+        ("Copy", KeybindAction::Copy, EditCommand::Copy),
+        ("Cut", KeybindAction::Cut, EditCommand::Cut),
+        ("Paste", KeybindAction::Paste, EditCommand::Paste),
+        ("Delete", KeybindAction::Delete, EditCommand::Delete),
+        ("Deselect", KeybindAction::Deselect, EditCommand::Deselect),
     ] {
         if ui.menu_item_enabled_selected_with_shortcut(
             label,
             settings.keybindings.get(action).label(ui),
             false,
-            enabled && session.map().is_some(),
+            command.is_enabled(session),
         ) {
             actions.edit = Some(command);
         }

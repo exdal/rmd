@@ -32,6 +32,23 @@ pub(crate) enum EditCommand {
     Deselect,
 }
 
+impl EditCommand {
+    pub(crate) fn is_enabled(self, session: &Session) -> bool {
+        let is_selected = session.selection().is_some();
+        let is_picking = session.tool() == Tool::Pick && session.picked_instance().is_some();
+        let is_stash = session.is_stash_active();
+        let is_enabled = match self {
+            Self::Copy => is_selected || is_picking,
+            Self::Cut => (is_selected || is_picking) && !is_stash,
+            Self::Paste => session.clipboard().is_some() && !is_stash,
+            Self::Delete => (is_selected || session.picked_instance().is_some()) && !is_stash,
+            Self::Deselect => is_selected || session.picked_instance().is_some(),
+        };
+
+        is_enabled && session.map().is_some()
+    }
+}
+
 impl UiState {
     pub(super) fn apply_edit_command(&mut self, session: &mut Session, frame: &mut ViewFrame<'_>) {
         let is_picking = session.tool() == Tool::Pick && session.picked_instance().is_some();
