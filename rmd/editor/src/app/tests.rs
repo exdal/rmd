@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use dear_imgui_rs::sys;
 use ui::theme;
@@ -26,6 +26,7 @@ fn headless_editor() -> App {
         ui: UiState::new(false).unwrap(),
         loader: Loader::new(),
         pending_map: None,
+        queued_maps: VecDeque::new(),
         pending_reload: None,
         pending_share: None,
         pending_trust: None,
@@ -428,6 +429,44 @@ fn opening_an_already_open_map_focuses_it_without_loading() {
     assert_eq!(app.session.state.active(), Some(first));
     assert!(!app.loader.is_busy());
     assert_eq!(app.session.state.document_ids().len(), 2);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn opening_several_maps_skips_open_ones_and_loads_the_rest_in_turn() {
+    let _guard = ui::testing::CONTEXT_LOCK.lock().unwrap();
+    let dir = std::env::temp_dir().join(format!("rmd-open-queue-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let mut app = headless_editor();
+    let [first, second, third] = ["first.dmm", "second.dmm", "third.dmm"].map(|name| dir.join(name));
+    for path in [&second, &third] {
+        fs::write(path, "\"a\" = (/turf,/area)\n\n(1,1,1) = {\"\na\n\"}\n").unwrap();
+    }
+    fs::write(&first, "").unwrap();
+    app.session.apply_map(worker::LoadedMap {
+        path: first.clone(),
+        map: dmm::Map::new(dmm::Size { x: 4, y: 4, z: 1 }),
+        z: 1,
+        errors: vec![],
+        repo: None,
+        conflict: None,
+    });
+
+    let loading = |app: &App| app.loader.view().map(|view| view.path);
+    app.apply_open(OpenRequest::Maps(vec![first, second.clone(), third.clone()]));
+    assert_eq!(loading(&app), Some(second.display().to_string()));
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let outcome = loop {
+        if let Some(outcome) = app.loader.poll() {
+            break outcome;
+        }
+
+        assert!(Instant::now() < deadline, "the first load did not finish");
+        thread::sleep(Duration::from_millis(5));
+    };
+    app.apply_outcome(outcome);
+    assert_eq!(loading(&app), Some(third.display().to_string()));
     let _ = fs::remove_dir_all(dir);
 }
 

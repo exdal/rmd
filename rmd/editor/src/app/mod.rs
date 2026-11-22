@@ -14,7 +14,7 @@ mod tests;
 pub(crate) mod update;
 
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     fmt::Display,
     fs, mem,
     panic::{self, AssertUnwindSafe},
@@ -171,6 +171,7 @@ pub(crate) fn run() -> ExitCode {
         ui,
         loader,
         pending_map,
+        queued_maps: VecDeque::new(),
         pending_reload: None,
         pending_share: None,
         pending_trust: None,
@@ -278,6 +279,7 @@ struct App {
     ui: UiState,
     loader: Loader,
     pending_map: Option<PendingMap>,
+    queued_maps: VecDeque<PathBuf>,
     pending_reload: Option<DocumentId>,
     pending_share: Option<PathBuf>,
     pending_trust: Option<(PathBuf, Box<LoadedCodebase>)>,
@@ -397,6 +399,12 @@ impl App {
             OpenRequest::PickMap => self.pick_file("BYOND map", "dmm").map(Opened::Map),
             OpenRequest::Codebase(path) => Some(Opened::Codebase(path)),
             OpenRequest::Map(path) => Some(Opened::Map(path)),
+            OpenRequest::Maps(paths) => {
+                self.queued_maps = paths.into();
+                self.open_queued_maps();
+
+                return;
+            },
             OpenRequest::ReloadCoop => {
                 let Some(path) = self.session.environment_path().map(PathBuf::from) else {
                     return;
@@ -448,6 +456,14 @@ impl App {
                 git_enabled: self.settings.git_enabled,
             },
         });
+    }
+
+    fn open_queued_maps(&mut self) {
+        while !self.loader.is_busy()
+            && let Some(path) = self.queued_maps.pop_front()
+        {
+            self.apply_open(OpenRequest::Map(path));
+        }
     }
 
     fn reload_profile(&mut self, request: ProfileReload) {
@@ -583,6 +599,7 @@ impl App {
                 self.ui
                     .set_map_report(fs::canonicalize(&path).unwrap_or_else(|_| path.clone()), report);
                 self.settings.record_recent(self.session.environment_path(), &path);
+                self.open_queued_maps();
             },
 
             Outcome::Failed { job, error } => {
@@ -590,6 +607,7 @@ impl App {
                 self.session.finish_coop_reload();
                 log::error!("{error}");
                 self.pending_map = None;
+                self.queued_maps.clear();
                 self.pending_reload = None;
                 self.pending_share = None;
                 self.ui.set_open_error(Some(error.clone()));
@@ -610,6 +628,7 @@ impl App {
                 self.retry_coop_after_load = false;
                 self.session.finish_coop_reload();
                 self.pending_map = None;
+                self.queued_maps.clear();
                 self.pending_reload = None;
                 self.pending_share = None;
                 self.ui.set_load_notice(None);

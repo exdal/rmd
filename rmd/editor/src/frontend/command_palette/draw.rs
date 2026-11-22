@@ -6,6 +6,7 @@ use ui::widgets::dpi;
 use super::{
     CommandPalette, Mode, Outcome, POPUP,
     candidate::{ActionCandidate, AreaCandidate, PrefabCandidate, Thumbnail},
+    command::Command,
 };
 use crate::{
     palette::panel::thumbnail::draw_placement,
@@ -172,6 +173,8 @@ impl CommandPalette {
             prefabs,
             areas,
             actions,
+            maps,
+            map_indices,
             mode,
             results,
             selected,
@@ -219,7 +222,19 @@ impl CommandPalette {
             };
             match mode {
                 Mode::Prefabs => draw_prefab(ui, session, &mut prefabs[index], &frame),
-                Mode::Actions => draw_action(ui, settings, &actions[index], &frame),
+                Mode::Actions => {
+                    let candidate = &actions[index];
+                    let is_opening_maps = candidate.command == Command::OpenMap && !map_indices.is_empty();
+                    let names = is_opening_maps.then(|| {
+                        map_indices
+                            .iter()
+                            .map(|&map| maps[map].name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    });
+
+                    draw_action(ui, settings, candidate, names.as_deref(), &frame);
+                },
                 Mode::Areas => draw_area(ui, &areas[index], &frame),
             }
         }
@@ -252,18 +267,18 @@ fn draw_prefab(ui: &Ui, session: &mut Session, candidate: &mut PrefabCandidate, 
     frame.draw_text(ui, frame.left(true), &lines, count.as_deref());
 }
 
-fn draw_action(ui: &Ui, settings: &Settings, candidate: &ActionCandidate, frame: &RowFrame) {
+fn draw_action(ui: &Ui, settings: &Settings, candidate: &ActionCandidate, maps: Option<&str>, frame: &RowFrame) {
     let keybind = candidate
         .command
         .keybind()
         .map(|action| settings.keybindings.get(action).label(ui));
 
-    frame.draw_text(
-        ui,
-        frame.left(false),
-        &[(candidate.command.label(), frame.text)],
-        keybind.as_deref(),
-    );
+    let mut lines = vec![(candidate.command.label(), frame.text)];
+    if let Some(maps) = maps {
+        lines.push((maps, frame.dim));
+    }
+
+    frame.draw_text(ui, frame.left(false), &lines, keybind.as_deref());
 }
 
 fn draw_area(ui: &Ui, candidate: &AreaCandidate, frame: &RowFrame) {

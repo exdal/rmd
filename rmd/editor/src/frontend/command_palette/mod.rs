@@ -1,13 +1,16 @@
-use std::{cmp::Reverse, collections::BTreeMap};
+use std::{cmp::Reverse, collections::BTreeMap, path::PathBuf};
 
 use base::coord::Coord;
 use dear_imgui_rs::{PopupQueryFlags, Ui};
 use prefab::Prefab;
 
 use self::{
-    candidate::{ActionCandidate, AreaCandidate, PrefabCandidate, build_actions, build_areas, build_prefabs},
+    candidate::{
+        ActionCandidate, AreaCandidate, MapCandidate, PrefabCandidate, build_actions, build_areas, build_maps,
+        build_prefabs,
+    },
     command::Command,
-    matcher::{Query, score},
+    matcher::{Query, score, split_arguments, token_score},
 };
 use super::{OpenRequest, ScreenshotRequest, UiState, menu::MenuActions};
 use crate::{
@@ -36,6 +39,7 @@ enum Choice {
     Prefab(Prefab),
     Command(Command),
     Area(Prefab),
+    Maps(Vec<PathBuf>),
 }
 
 enum Outcome {
@@ -48,6 +52,8 @@ pub(crate) struct CommandPalette {
     prefabs: Vec<PrefabCandidate>,
     areas: Vec<AreaCandidate>,
     actions: Vec<ActionCandidate>,
+    maps: Vec<MapCandidate>,
+    map_indices: Vec<usize>,
     query: String,
     ranked: Option<String>,
     mode: Mode,
@@ -67,6 +73,8 @@ impl CommandPalette {
             prefabs: build_prefabs(session, &placed),
             areas: build_areas(session, &placed),
             actions: build_actions(session),
+            maps: build_maps(session),
+            map_indices: Vec::new(),
             query: String::new(),
             ranked: None,
             mode: Mode::Prefabs,
@@ -91,9 +99,15 @@ impl CommandPalette {
         let (mode, text) = split_mode(query);
         let query = Query::parse(text);
         self.mode = mode;
+        self.map_indices.clear();
         self.results = match mode {
             Mode::Prefabs => rank_prefabs(&self.prefabs, &query),
-            Mode::Actions => rank_actions(&self.actions, &query),
+            Mode::Actions => {
+                let (results, map_indices) = rank_actions(&self.actions, &self.maps, &query);
+                self.map_indices = map_indices;
+
+                results
+            },
             Mode::Areas => rank_areas(&self.areas, &query),
         };
         self.results.truncate(MAX_RESULTS);
@@ -104,7 +118,20 @@ impl CommandPalette {
 
         Some(match self.mode {
             Mode::Prefabs => Choice::Prefab(self.prefabs[index].prefab.clone()),
-            Mode::Actions => Choice::Command(self.actions[index].command),
+            Mode::Actions => {
+                let command = self.actions[index].command;
+                if command == Command::OpenMap && !self.map_indices.is_empty() {
+                    let paths = self
+                        .map_indices
+                        .iter()
+                        .map(|&map| self.maps[map].path.clone())
+                        .collect::<Vec<_>>();
+
+                    return Some(Choice::Maps(paths));
+                }
+
+                Choice::Command(command)
+            },
             Mode::Areas => Choice::Area(self.areas[index].prefab.clone()),
         })
     }
@@ -187,15 +214,29 @@ fn rank_areas(areas: &[AreaCandidate], query: &Query) -> Vec<usize> {
     scored.into_iter().map(|(index, _)| index).collect::<Vec<_>>()
 }
 
-fn rank_actions(actions: &[ActionCandidate], query: &Query) -> Vec<usize> {
+fn rank_actions(actions: &[ActionCandidate], maps: &[MapCandidate], query: &Query) -> (Vec<usize>, Vec<usize>) {
     if query.is_empty() {
-        return (0..actions.len()).collect::<Vec<_>>();
+        return ((0..actions.len()).collect::<Vec<_>>(), Vec::new());
     }
 
+    let mut map_indices = Vec::new();
     let mut scored = actions
         .iter()
         .enumerate()
-        .filter_map(|(index, candidate)| Some((index, score(query, &candidate.haystack)?)))
+        .filter_map(|(index, candidate)| {
+            if let Some(score) = score(query, &candidate.haystack) {
+                return Some((index, score));
+            }
+
+            if candidate.command != Command::OpenMap {
+                return None;
+            }
+
+            let (score, arguments) = split_arguments(query, &candidate.haystack)?;
+            map_indices = resolve_maps(maps, arguments)?;
+
+            Some((index, score))
+        })
         .collect::<Vec<_>>();
     scored.sort_by(|&(a, a_score), &(b, b_score)| {
         b_score
@@ -203,7 +244,33 @@ fn rank_actions(actions: &[ActionCandidate], query: &Query) -> Vec<usize> {
             .then_with(|| actions[a].command.label().cmp(actions[b].command.label()))
     });
 
-    scored.into_iter().map(|(index, _)| index).collect::<Vec<_>>()
+    (
+        scored.into_iter().map(|(index, _)| index).collect::<Vec<_>>(),
+        map_indices,
+    )
+}
+
+fn resolve_maps(maps: &[MapCandidate], tokens: &[String]) -> Option<Vec<usize>> {
+    let mut resolved = Vec::new();
+    for token in tokens {
+        let best = maps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| Some((index, token_score(&candidate.haystack, token)?)))
+            .max_by(|&(a, a_score), &(b, b_score)| {
+                a_score
+                    .cmp(&b_score)
+                    .then_with(|| maps[b].path.as_os_str().len().cmp(&maps[a].path.as_os_str().len()))
+                    .then_with(|| maps[b].path.cmp(&maps[a].path))
+            })
+            .map(|(index, _)| index)?;
+
+        if !resolved.contains(&best) {
+            resolved.push(best);
+        }
+    }
+
+    Some(resolved)
 }
 
 impl UiState {
@@ -243,6 +310,7 @@ impl UiState {
             Choice::Prefab(prefab) => session.choose_prefab(prefab),
             Choice::Command(command) => self.apply_command(session, menu, command),
             Choice::Area(prefab) => self.jump_to_area(session, prefab),
+            Choice::Maps(paths) => menu.open = Some(OpenRequest::Maps(paths)),
         }
     }
 

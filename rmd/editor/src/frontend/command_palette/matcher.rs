@@ -57,18 +57,37 @@ pub(crate) fn score(query: &Query, haystack: &Haystack) -> Option<u32> {
         return None;
     }
 
-    query.tokens.iter().try_fold(0, |total, token| {
-        let best = [
-            path_tier(haystack, token),
-            haystack.name.as_deref().and_then(|name| name_tier(name, token)),
-            haystack.extra.as_deref().and_then(|extra| extra_tier(extra, token)),
-        ]
-        .into_iter()
-        .flatten()
-        .max()?;
+    query
+        .tokens
+        .iter()
+        .try_fold(0, |total, token| Some(total + token_score(haystack, token)?))
+}
 
-        Some(total + best)
-    })
+pub(crate) fn token_score(haystack: &Haystack, token: &str) -> Option<u32> {
+    [
+        path_tier(haystack, token),
+        haystack.name.as_deref().and_then(|name| name_tier(name, token)),
+        haystack.extra.as_deref().and_then(|extra| extra_tier(extra, token)),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+/// Leading tokens that match name the command and the rest are its arguments
+pub(crate) fn split_arguments<'a>(query: &'a Query, haystack: &Haystack) -> Option<(u32, &'a [String])> {
+    let mut total = 0;
+    let mut matched = 0;
+    for token in &query.tokens {
+        let Some(token_score) = token_score(haystack, token) else {
+            break;
+        };
+
+        total += token_score;
+        matched += 1;
+    }
+
+    (matched > 0 && matched < query.tokens.len()).then(|| (total, &query.tokens[matched..]))
 }
 
 fn occurrences<'a>(text: &'a str, token: &'a str) -> impl Iterator<Item = usize> + 'a {

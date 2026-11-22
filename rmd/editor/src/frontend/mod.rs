@@ -171,6 +171,7 @@ pub enum OpenRequest {
     PickMap,
     Codebase(PathBuf),
     Map(PathBuf),
+    Maps(Vec<PathBuf>),
     ShareMap(PathBuf),
     ReloadCoop,
 }

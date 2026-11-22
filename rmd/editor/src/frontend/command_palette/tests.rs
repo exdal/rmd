@@ -272,3 +272,30 @@ fn typing_still_reaches_the_input_after_enter_finds_nothing() {
     let palette = app.state.command_palette.as_ref().unwrap();
     assert!(palette.query.ends_with("turf"), "{:?}", palette.query);
 }
+
+#[test]
+fn open_map_takes_map_names_as_arguments() {
+    let _guard = CONTEXT_LOCK.lock().unwrap();
+    let app = RectangleUiHarness::new();
+    let map = |name: &str| {
+        app.session
+            .maps()
+            .iter()
+            .find(|path| path.file_name().is_some_and(|file| file == name))
+            .unwrap()
+            .clone()
+    };
+    let mut palette = CommandPalette::new(&app.session);
+
+    palette.rank(">open map test2 test");
+    assert_eq!(
+        palette.choice(0),
+        Some(Choice::Maps(vec![map("test2.dmm"), map("test.dmm")]))
+    );
+
+    palette.rank(">open map");
+    assert_eq!(palette.choice(0), Some(Choice::Command(Command::OpenMap)));
+
+    palette.rank(">open map zzzz");
+    assert!(palette.results.is_empty());
+}
