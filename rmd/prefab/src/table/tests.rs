@@ -69,6 +69,29 @@ fn live_prefabs_are_the_placed_and_pinned_ones() {
 }
 
 #[test]
+fn placements_count_each_prefab_and_skip_pinned_only_and_unplaced_entries() {
+    let mut table = PrefabTable::default();
+    let placed = table.intern(&sign(&[]));
+    let pinned = table.intern(&sign(&[("dir", Value::Num(4.0))]));
+    let removed = table.intern(&sign(&[("dir", Value::Num(8.0))]));
+
+    table.place(placed);
+    table.place(placed);
+    table.place(placed);
+    table.place(removed);
+    table.pin(pinned);
+
+    assert_eq!(
+        table.placements().collect::<Vec<_>>(),
+        [(table.get(placed), 3), (table.get(removed), 1)]
+    );
+
+    table.unplace(removed);
+
+    assert_eq!(table.placements().collect::<Vec<_>>(), [(table.get(placed), 3)]);
+}
+
+#[test]
 #[should_panic(expected = "unplaced a prefab that was never placed")]
 fn unplacing_below_zero_panics() {
     let mut table = PrefabTable::default();

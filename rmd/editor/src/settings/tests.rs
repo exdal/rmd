@@ -155,6 +155,8 @@ fn strong_dmm_keybindings_match_the_selected_shortcuts() {
         (KeybindAction::Find, KeyBinding::with_ctrl(Key::F)),
         (KeybindAction::FindNext, KeyBinding::new(Key::F3)),
         (KeybindAction::GoTo, KeyBinding::with_ctrl(Key::G)),
+        (KeybindAction::CommandPalette, KeyBinding::with_ctrl(Key::P)),
+        (KeybindAction::Recent0, KeyBinding::new(Key::P)),
         (KeybindAction::ShowTileGrid, KeyBinding::new(Key::G)),
         (KeybindAction::ShowPixelGrid, KeyBinding::with_shift(Key::G)),
     ];

@@ -502,7 +502,7 @@ fn draw_atom_menus(
     action
 }
 
-fn display_name(tree: Option<&ObjectTree>, prefab: &Prefab) -> String {
+pub(crate) fn display_name(tree: Option<&ObjectTree>, prefab: &Prefab) -> String {
     let name = Identifier::from(vars::NAME);
     prefab
         .var(&name)

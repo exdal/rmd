@@ -214,6 +214,18 @@ impl Session {
         prefabs
     }
 
+    pub fn placed_prefabs(&self, id: DocumentId) -> Vec<(Prefab, u32)> {
+        let Some(document) = self.state.document(id) else {
+            return Vec::new();
+        };
+
+        document
+            .map
+            .placed_prefabs()
+            .map(|(prefab, placed)| (prefab.clone(), placed))
+            .collect()
+    }
+
     pub fn is_prefab_placed(&self, id: DocumentId, prefab: &Prefab) -> bool {
         self.state
             .document(id)

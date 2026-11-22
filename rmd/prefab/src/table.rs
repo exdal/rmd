@@ -82,6 +82,13 @@ impl PrefabTable {
             .map(|entry| &entry.prefab)
     }
 
+    pub fn placements(&self) -> impl Iterator<Item = (&Prefab, u32)> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.placed > 0)
+            .map(|entry| (&entry.prefab, entry.placed))
+    }
+
     pub fn placed_entries(&self) -> usize {
         self.entries.iter().filter(|entry| entry.placed > 0).count()
     }

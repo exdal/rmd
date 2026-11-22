@@ -165,6 +165,10 @@ impl Grid {
         self.table.live().filter(move |prefab| prefab.path == *path)
     }
 
+    pub fn placed_prefabs(&self) -> impl Iterator<Item = (&Prefab, u32)> {
+        self.table.placements()
+    }
+
     pub fn identical(&self, prefab: &Prefab) -> Vec<PrefabInstanceId> {
         let Some(wanted) = self.table.find(prefab) else {
             return Vec::new();

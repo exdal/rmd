@@ -45,6 +45,7 @@ pub(super) struct MenuActions {
     pub(super) redo: bool,
     pub(super) search: bool,
     pub(super) go_to: bool,
+    pub(super) command_palette: bool,
     pub(super) resize_map: bool,
     pub(super) reset_layout: bool,
     pub(super) toggle_panel: Option<Panel>,
@@ -295,6 +296,14 @@ fn draw_edit_menu(ui: &Ui, session: &Session, settings: &Settings, actions: &mut
         session.map().is_some(),
     ) {
         actions.go_to = true;
+    }
+    if ui.menu_item_enabled_selected_with_shortcut(
+        "Command palette...",
+        settings.keybindings.get(KeybindAction::CommandPalette).label(ui),
+        false,
+        true,
+    ) {
+        actions.command_palette = true;
     }
     if ui.menu_item_enabled_selected_no_shortcut(
         "Resize map...",

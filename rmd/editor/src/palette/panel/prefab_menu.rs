@@ -121,7 +121,7 @@ fn build_row(
     }
 }
 
-fn override_lines(prefab: &Prefab) -> Vec<String> {
+pub(crate) fn override_lines(prefab: &Prefab) -> Vec<String> {
     prefab
         .vars
         .iter()

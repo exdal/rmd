@@ -59,6 +59,7 @@ use crate::{
 
 mod about;
 mod actions;
+mod command_palette;
 pub(crate) mod dialog;
 #[cfg(test)]
 pub(crate) mod fixtures;
@@ -66,6 +67,7 @@ mod menu;
 pub(crate) mod welcome;
 
 use self::{
+    command_palette::CommandPalette,
     dialog::{SAVE_ERROR_COLOR, TrustDecision, draw_keybind_preset_dialog},
     welcome::{ForgetRequest, WelcomeOutput},
 };
@@ -231,6 +233,7 @@ pub struct UiState {
     pub(crate) delete_level_dialog: Option<DeleteLevelDialog>,
     pub(crate) resize_map_dialog: Option<ResizeMapDialog>,
     pub(crate) go_to_dialog: Option<GoToDialog>,
+    pub(crate) command_palette: Option<CommandPalette>,
     pub(crate) coop_dialog: Option<CoopDialog>,
     pub(crate) coop_notice: CoopNotice,
     pub(crate) comment_draft: Option<CommentDraft>,
@@ -315,6 +318,7 @@ impl UiState {
             delete_level_dialog: None,
             resize_map_dialog: None,
             go_to_dialog: None,
+            command_palette: None,
             coop_dialog: None,
             coop_notice: CoopNotice::default(),
             comment_draft: None,
@@ -468,6 +472,7 @@ impl UiState {
         }
 
         let mut menu = self.draw_menu_bar(ui, session, settings, loading);
+        self.draw_command_palette(ui, session, settings, loading, &menu);
         self.read_edit_keys(ui, session, settings, &mut menu);
         self.apply_window_actions(settings, &menu);
         settings.mirror_camera ^= menu.toggle_mirror_camera;
