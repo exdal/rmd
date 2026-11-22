@@ -5,7 +5,7 @@ use ui::{
     widgets::{dpi, fit_icon},
 };
 
-use crate::palette::session::PrefabThumbnail;
+use crate::{palette::session::PrefabThumbnail, viewport::preview::PlacementPreview};
 
 const ORIGIN_RADIUS: f32 = 3.0;
 const ORIGIN_MAX_DISTANCE: f32 = 32.0;
@@ -15,6 +15,19 @@ const ORIGIN_COLOR: [f32; 4] = [1.0, 0.5, 0.0, 1.0];
 pub(crate) struct IconOrigin {
     pub offset: [i32; 2],
     pub tile_size: u32,
+}
+
+pub(crate) fn draw_placement(ui: &Ui, placement: Option<PlacementPreview>, min: [f32; 2], extent: f32, tile_size: u32) {
+    draw_thumbnail(
+        ui,
+        placement.map(|placement| placement.thumbnail),
+        min,
+        extent,
+        placement.map(|placement| IconOrigin {
+            offset: placement.offset,
+            tile_size,
+        }),
+    );
 }
 
 pub(crate) fn draw_thumbnail(

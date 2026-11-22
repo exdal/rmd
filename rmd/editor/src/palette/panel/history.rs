@@ -4,7 +4,7 @@ use ui::widgets::dpi;
 
 use crate::{
     document::state::RecentPrefab,
-    palette::panel::thumbnail::{IconOrigin, draw_thumbnail},
+    palette::panel::thumbnail::draw_placement,
     session::Session,
     settings::keybind::KeyBindings,
     viewport::panel::overlay::{OverlayRect, draw_overlay_underlay, overlay_padding},
@@ -44,15 +44,12 @@ pub(crate) fn draw_history_overlay(
         let button_min = ui.item_rect_min();
         let inset = (button_size - icon_extent) * 0.5;
         let placement = session.prefab_placement(prefab);
-        draw_thumbnail(
+        draw_placement(
             ui,
-            placement.map(|placement| placement.thumbnail),
+            placement,
             [button_min[0] + inset, button_min[1] + inset],
             icon_extent,
-            placement.map(|placement| IconOrigin {
-                offset: placement.offset,
-                tile_size: session.options.tile_size,
-            }),
+            session.options.tile_size,
         );
         draw_recent_badge(ui, &key);
         if recent.is_locked {

@@ -6,7 +6,7 @@ use ui::widgets::dpi;
 
 use crate::{
     document::DocumentId,
-    palette::panel::thumbnail::{IconOrigin, draw_thumbnail},
+    palette::panel::thumbnail::draw_placement,
     search::panel::{FindPanel, SimilarMatchKind},
     session::Session,
     settings::{Settings, keybind::KeybindAction},
@@ -257,14 +257,5 @@ fn draw_rows<'a>(ui: &Ui, menu: &'a PrefabMenu) -> Option<RowAction<'a>> {
 
 fn draw_icon(ui: &Ui, placement: Option<PlacementPreview>, tile_size: u32, extent: f32, row_height: f32) {
     ui.dummy([extent, row_height]);
-    draw_thumbnail(
-        ui,
-        placement.map(|placement| placement.thumbnail),
-        ui.item_rect_min(),
-        extent,
-        placement.map(|placement| IconOrigin {
-            offset: placement.offset,
-            tile_size,
-        }),
-    );
+    draw_placement(ui, placement, ui.item_rect_min(), extent, tile_size);
 }
