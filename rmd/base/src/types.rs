@@ -223,6 +223,24 @@ pub fn encode_text_macros(text: &str) -> String {
     out
 }
 
+pub fn encode_string(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\\' | '"' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            },
+            '\n' => escaped.push_str(r"\n"),
+            '\t' => escaped.push_str(r"\t"),
+            '\r' => escaped.push_str(r"\r"),
+            _ => escaped.push(ch),
+        }
+    }
+
+    encode_text_macros(&escaped)
+}
+
 fn text_macro(rest: &str) -> Option<(char, usize)> {
     TEXT_MACROS.into_iter().find_map(|(name, code)| {
         let after = rest.strip_prefix(name)?;
@@ -371,7 +389,10 @@ impl std::ops::BitOrAssign for InputType {
 mod tests {
     use std::hash::{BuildHasher, RandomState};
 
-    use super::{InputType, IrNodeId, ListEntry, ProcId, Value, decode_string, encode_text_macros, strip_text_macros};
+    use super::{
+        InputType, IrNodeId, ListEntry, ProcId, Value, decode_string, encode_string, encode_text_macros,
+        strip_text_macros,
+    };
 
     /// The disassembly form comes off `Display`, so `Debug` on a container prints it too.
     #[test]
@@ -461,6 +482,25 @@ mod tests {
 
         assert_eq!(encode_text_macros("a\u{FFFD}\u{17}b"), "a\u{FFFD}\u{17}b");
         assert_eq!(encode_text_macros("\u{FFFD}"), "\u{FFFD}");
+    }
+
+    #[test]
+    fn encode_string_inverts_decode_string() {
+        for source in [
+            r#"\improper \"Bob\" the \\ builder"#,
+            r"tab\there",
+            r"\x stays",
+            r"ends\\",
+        ] {
+            let decoded = decode_string(source);
+
+            assert_eq!(decode_string(&encode_string(&decoded)), decoded, "{source}");
+        }
+
+        assert_eq!(
+            encode_string(&decode_string(r#"\improper \"Bob\""#)),
+            r#"\improper \"Bob\""#
+        );
     }
 
     /// A string ending mid-escape must not drop the backslash or panic.

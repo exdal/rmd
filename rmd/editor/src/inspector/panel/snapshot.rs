@@ -1,6 +1,6 @@
 use base::{
     path::TreePath,
-    types::{Identifier, ListEntry, Value, encode_text_macros},
+    types::{Identifier, ListEntry, Value, encode_string, encode_text_macros},
     vars,
 };
 use std::collections::{HashMap, HashSet};
@@ -175,11 +175,13 @@ pub(super) fn property_snapshot(
         || resolved.is_none() && prefab.var(&name).is_some();
     let inherited = resolved
         .and_then(|resolved| resolved.inherited.cloned())
+        .map(spelling)
         .unwrap_or_else(|| builtin_default(name.as_str()));
-    let value = resolved
-        .map(|resolved| resolved.value.clone())
-        .or_else(|| prefab.var(&name).cloned())
-        .unwrap_or_else(|| inherited.clone());
+    let value = match resolved {
+        Some(resolved) if resolved.origin == visual::ValueOrigin::Instance => resolved.value.clone(),
+        Some(resolved) => spelling(resolved.value.clone()),
+        None => prefab.var(&name).cloned().unwrap_or_else(|| inherited.clone()),
+    };
     let source = prefab
         .vars
         .iter()
@@ -195,6 +197,23 @@ pub(super) fn property_snapshot(
         inherited,
         editor_text,
         overridden,
+    }
+}
+
+/// Tree defaults are decoded while dmm values keep their source spelling, and the inspector edits spellings
+pub(super) fn spelling(value: Value) -> Value {
+    match value {
+        Value::Text(text) => Value::Text(encode_string(&text)),
+        Value::List(entries) => Value::List(
+            entries
+                .into_iter()
+                .map(|entry| ListEntry {
+                    key: spelling(entry.key),
+                    value: entry.value.map(spelling),
+                })
+                .collect(),
+        ),
+        value => value,
     }
 }
 
@@ -217,7 +236,7 @@ fn builtin_default(name: &str) -> Value {
 fn property_editor_text(name: &str, value: &Value, source: &str) -> String {
     match (name, value) {
         (vars::NAME | vars::ICON_STATE | vars::COLOR, Value::Text(text)) | (vars::ICON, Value::Resource(text)) => {
-            text.clone()
+            encode_text_macros(text)
         },
         (vars::NAME | vars::ICON | vars::ICON_STATE | vars::COLOR, Value::Null) => String::new(),
         _ => source.to_string(),
@@ -317,7 +336,7 @@ pub(super) fn inspector_variables(
 
                 defaults.entry(name.clone()).or_insert_with(|| {
                     (
-                        variable.value.clone(),
+                        spelling(variable.value.clone()),
                         variable.resolved_type.clone(),
                         declaring_type(tree, id, name),
                     )

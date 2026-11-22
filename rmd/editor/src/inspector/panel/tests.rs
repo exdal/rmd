@@ -4,7 +4,7 @@ use base::{
     coord::Coord,
     location::Location,
     path::TreePath,
-    types::{Identifier, ListEntry, Value, VarModifiers},
+    types::{Identifier, ListEntry, Value, VarModifiers, decode_string},
 };
 use dmi::metadata::Dir;
 use dmm::{parser::parse_value, writer::format_value};
@@ -18,10 +18,10 @@ use crate::{
 
 use super::{
     direction::selected_direction,
-    property::{commit_int_property, format_color},
+    property::{commit_int_property, format_color, is_writable},
     snapshot::{
         InspectorVariable, VariableGroup, inspector_snapshot, inspector_variables, list_entry_drafts,
-        parse_list_entries, property_snapshot, variable_groups,
+        parse_list_entries, property_snapshot, spelling, variable_groups,
     },
     state::{
         EditorMode, InspectorFilter, InspectorSection, ListEntryDraft, VariableDraft, inspector_sections, split_pinned,
@@ -488,6 +488,16 @@ fn special_property_snapshots_preserve_override_source_and_fallback_defaults() {
     assert_eq!(pixel.editor_text, "4");
     assert!(!alpha.overridden);
     assert_eq!(alpha.value, Value::Num(255.0));
+}
+
+#[test]
+fn text_is_edited_as_its_dmm_spelling() {
+    let default = Value::Text(decode_string(r#"\improper \"Bob\""#));
+    assert_eq!(spelling(default), Value::Text(r#"\improper \"Bob\""#.into()));
+
+    assert!(is_writable(&Value::Text(r"\improper Bob".into())));
+    assert!(!is_writable(&Value::Text(r#"Bob "the" builder"#.into())));
+    assert!(!is_writable(&Value::Text(r"Bob\".into())));
 }
 
 #[test]

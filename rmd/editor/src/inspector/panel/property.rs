@@ -617,6 +617,12 @@ pub(super) fn commit_value(
     session: &mut Session, scope: EditScope, name: Identifier, value: Value, group: Option<EditGroupId>,
     draft: &mut VariableDraft,
 ) {
+    if !is_writable(&value) {
+        draft.error = Some(String::from(r#"Escape " as \" and a final \ as \\"#));
+
+        return;
+    }
+
     let typed = TypedDraft::new(&value);
     if session
         .edit_instance_vars_in(scope, format!("set {name}"), &[VarMutation::Set(name, value)], group)
@@ -627,6 +633,14 @@ pub(super) fn commit_value(
         draft.error = None;
     } else {
         draft.error = Some(String::from("Selected object is no longer available"));
+    }
+}
+
+// Text is stored as the body of the dmm string literal, so it must survive being written and read back
+pub(super) fn is_writable(value: &Value) -> bool {
+    match value {
+        Value::Text(_) | Value::Resource(_) => parse_value(&format_value(value)).is_ok_and(|parsed| parsed == *value),
+        _ => true,
     }
 }
 
