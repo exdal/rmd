@@ -13,6 +13,8 @@
 //! rmdc roundtrip <file.dmm> parse a map, write it back out and diff the bytes
 //! rmdc icon   <file.dmi>    decode an icon and list its states
 //! ```
+//!
+//! `--no-stddef` compiles against `<core.dm>` alone for every command that preprocesses.
 
 use base::{
     arena::StrArena,
@@ -33,12 +35,14 @@ use std::{
 use dmi::{IconFile, metadata::IconState};
 use ir::ProcIndex;
 use objtree::{ObjectTree, ProcDecl, TypeId, VarDecl};
+use preprocessor::Preprocessor;
 
 fn usage() -> ExitCode {
     eprintln!(
         "usage: rmdc <tokens|pp|tree|ir|bytecode|eval|bake|map|roundtrip|icon> <file>\nrmdc ir|bytecode <file> \
          [--entry <proc-path> | --all]\nrmdc eval <file> [--entry <proc-path>] [--trusted]\nrmdc bake <dme> <map> \
-         [--summary] [--check-edit] [--trusted]\n--trusted lets call_ext and load_ext run native libraries"
+         [--summary] [--check-edit] [--trusted]\n--trusted lets call_ext and load_ext run native libraries\n\
+         --no-stddef compiles pp, tree, ir, bytecode, eval and bake against core.dm alone"
     );
 
     ExitCode::FAILURE
@@ -57,6 +61,12 @@ fn main() -> ExitCode {
         return usage();
     }
 
+    let is_stddef = !args.iter().any(|arg| arg == "--no-stddef");
+    args.retain(|arg| arg != "--no-stddef");
+    if !is_stddef && !matches!(command.as_str(), "pp" | "tree" | "ir" | "bytecode" | "eval" | "bake") {
+        return usage();
+    }
+
     let limits = vm::Limits {
         external: if is_trusted {
             vm::ExternalAccess::Trusted
@@ -68,18 +78,18 @@ fn main() -> ExitCode {
 
     let result = match command.as_str() {
         "tokens" => dump_tokens(&path),
-        "pp" => dump_preprocessed(&path),
-        "tree" => dump_tree(&path),
+        "pp" => dump_preprocessed(&path, is_stddef),
+        "tree" => dump_tree(&path, is_stddef),
         "ir" => match parse_entry_selection(args, true) {
-            Some(selection) => dump_ir(&path, selection),
+            Some(selection) => dump_ir(&path, selection, is_stddef),
             None => return usage(),
         },
         "bytecode" => match parse_entry_selection(args, true) {
-            Some(selection) => dump_bytecode(&path, selection),
+            Some(selection) => dump_bytecode(&path, selection, is_stddef),
             None => return usage(),
         },
         "eval" => match parse_entry_selection(args, false) {
-            Some(selection) => eval(&path, selection, limits),
+            Some(selection) => eval(&path, selection, limits, is_stddef),
             None => return usage(),
         },
         "bake" => match args.split_first() {
@@ -94,6 +104,7 @@ fn main() -> ExitCode {
                     flags.iter().any(|flag| flag == "--summary"),
                     flags.iter().any(|flag| flag == "--check-edit"),
                     limits,
+                    is_stddef,
                 )
             },
             None => return usage(),
@@ -151,9 +162,9 @@ fn dump_tokens(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn dump_preprocessed(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn dump_preprocessed(path: &PathBuf, is_stddef: bool) -> Result<(), Box<dyn std::error::Error>> {
     let arena = StrArena::new();
-    let preprocessed = preprocessor::preprocess(&arena, path)?;
+    let preprocessed = preprocessor(&arena, is_stddef).run(path)?;
 
     println!("{}", preprocessor::render(&preprocessed.tokens));
     println!(
@@ -174,11 +185,11 @@ fn dump_preprocessed(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn dump_tree(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn dump_tree(path: &PathBuf, is_stddef: bool) -> Result<(), Box<dyn std::error::Error>> {
     let arena = StrArena::new();
 
     println!("=== PREPROCESS ===");
-    let preprocessed = preprocessor::preprocess(&arena, path)?;
+    let preprocessed = preprocessor(&arena, is_stddef).run(path)?;
     println!(
         "{} tokens, {} resources, {} diagnostics",
         preprocessed.tokens.len(),
@@ -219,9 +230,9 @@ fn dump_tree(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn dump_ir(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::error::Error>> {
+fn dump_ir(path: &Path, selection: EntrySelection, is_stddef: bool) -> Result<(), Box<dyn std::error::Error>> {
     let arena = StrArena::new();
-    let preprocessed = preprocessor::preprocess(&arena, path)?;
+    let preprocessed = preprocessor(&arena, is_stddef).run(path)?;
     if !preprocessed.is_ok() {
         return Err("preprocessing failed".into());
     }
@@ -247,9 +258,9 @@ fn dump_ir(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-fn dump_bytecode(path: &Path, selection: EntrySelection) -> Result<(), Box<dyn std::error::Error>> {
+fn dump_bytecode(path: &Path, selection: EntrySelection, is_stddef: bool) -> Result<(), Box<dyn std::error::Error>> {
     let arena = StrArena::new();
-    let preprocessed = preprocessor::preprocess(&arena, path)?;
+    let preprocessed = preprocessor(&arena, is_stddef).run(path)?;
     if !preprocessed.is_ok() {
         return Err("preprocessing failed".into());
     }
@@ -306,11 +317,11 @@ fn resolve_entry(
 }
 
 fn bake_map(
-    entry: &Path, map_path: &Path, summary: bool, check_edit: bool, limits: vm::Limits,
+    entry: &Path, map_path: &Path, summary: bool, check_edit: bool, limits: vm::Limits, is_stddef: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let compile_started = std::time::Instant::now();
     let arena = StrArena::new();
-    let preprocessed = preprocessor::Preprocessor::new(&arena).with_baking(true).run(entry)?;
+    let preprocessed = preprocessor(&arena, is_stddef).with_baking(true).run(entry)?;
     let source_root = source_root(&preprocessed.sources, preprocessed.entry, entry);
     for error in &preprocessed.errors {
         eprintln!(
@@ -600,8 +611,10 @@ fn report_bake_output(bake: &mut vm::bake::Bake) {
     }
 }
 
-fn eval(path: &Path, selection: EntrySelection, limits: vm::Limits) -> Result<(), Box<dyn std::error::Error>> {
-    for line in evaluate_file_with(path, selection, limits)? {
+fn eval(
+    path: &Path, selection: EntrySelection, limits: vm::Limits, is_stddef: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for line in evaluate_file_with(path, selection, limits, is_stddef)? {
         println!("{line}");
     }
 
@@ -610,14 +623,14 @@ fn eval(path: &Path, selection: EntrySelection, limits: vm::Limits) -> Result<()
 
 #[cfg(test)]
 fn evaluate_file(path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    evaluate_file_with(path, EntrySelection::Auto, vm::Limits::default())
+    evaluate_file_with(path, EntrySelection::Auto, vm::Limits::default(), true)
 }
 
 fn evaluate_file_with(
-    path: &Path, selection: EntrySelection, limits: vm::Limits,
+    path: &Path, selection: EntrySelection, limits: vm::Limits, is_stddef: bool,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let arena = StrArena::new();
-    let preprocessed = preprocessor::preprocess(&arena, path)?;
+    let preprocessed = preprocessor(&arena, is_stddef).run(path)?;
     let source_root = source_root(&preprocessed.sources, preprocessed.entry, path);
     for error in &preprocessed.errors {
         eprintln!(
@@ -664,6 +677,15 @@ fn evaluate_file_with(
     })?;
 
     Ok(runtime.take_output())
+}
+
+fn preprocessor(arena: &StrArena, is_stddef: bool) -> Preprocessor<'_> {
+    let preprocessor = Preprocessor::new(arena);
+    if is_stddef {
+        return preprocessor;
+    }
+
+    preprocessor.without_prelude()
 }
 
 fn render_tree(tree: &ObjectTree, sources: &SourceMap<'_>, source_root: &Path) -> String {
@@ -970,7 +992,8 @@ mod tests {
             evaluate_file_with(
                 &path,
                 EntrySelection::Explicit(String::from("/proc/main")),
-                vm::Limits::default()
+                vm::Limits::default(),
+                true
             )
             .expect("evaluate explicit main"),
             vec![String::from("55")]
