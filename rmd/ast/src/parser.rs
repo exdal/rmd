@@ -334,12 +334,8 @@ impl<'a, 't> Parser<'a, 't> {
         operator_proc
     }
 
-    fn parse_path(&mut self) -> ParseResult<TreePath> {
-        self.parse_path_in(false)
-    }
-
     /// `/obj/item/paper/final` names a type, and only `var/final/x` or a `var` block makes it a modifier
-    fn parse_path_in(&mut self, declaring: bool) -> ParseResult<TreePath> {
+    fn parse_path(&mut self, declaring: bool) -> ParseResult<TreePath> {
         let absolute = self.peek_is(Token::Slash);
         // `/datum/manipulator_task/cargo/dropoff_base/throw`
         let mut after_separator = absolute || self.at_path_dot();
@@ -520,7 +516,7 @@ impl<'a, 't> Parser<'a, 't> {
             return Ok(());
         }
 
-        let parsed = self.parse_path_in(declaring)?;
+        let parsed = self.parse_path(declaring)?;
         let path = match prefix {
             Some(prefix) => prefix.concat(&parsed),
             None => parsed,
@@ -603,7 +599,7 @@ impl<'a, 't> Parser<'a, 't> {
 
             let next = if self.consume(Token::Comma) && !self.at_statement_end() {
                 let (_, next_location) = self.peek().ok_or_else(ParseError::end_of_file)?;
-                let parsed = self.parse_path_in(true)?;
+                let parsed = self.parse_path(true)?;
 
                 Some((path.sibling(&parsed), next_location))
             } else {
@@ -637,6 +633,7 @@ impl<'a, 't> Parser<'a, 't> {
         } else {
             &path.segments[..path.name_offset.min(path.segments.len())]
         };
+
         VarSpec {
             name: path.name().cloned().unwrap_or_else(|| Identifier::from(String::new())),
             var_type: (!declared.is_empty()).then(|| TreePath::new(declared.to_vec(), true)),
@@ -720,7 +717,7 @@ impl<'a, 't> Parser<'a, 't> {
             let path = if self.consume(Token::Null) {
                 TreePath::new(vec![Identifier::from("null")], false)
             } else {
-                self.parse_path()?
+                self.parse_path(true)?
             };
             let mut spec = self.var_spec_from_path(&path);
             self.parse_var_spec_suffix(&mut spec)?;
@@ -774,7 +771,7 @@ impl<'a, 't> Parser<'a, 't> {
                 if spec.path.is_some() {
                     return Err(ParseError::unexpected("a type flag", token, location));
                 }
-                spec.path = Some(self.parse_path()?);
+                spec.path = Some(self.parse_path(false)?);
             } else {
                 return Err(ParseError::unexpected("an input type or path", token, location));
             }
@@ -1283,7 +1280,7 @@ impl<'a, 't> Parser<'a, 't> {
     }
 
     fn parse_loop_spec(&mut self) -> ParseResult<VarSpec> {
-        let path = self.parse_path()?;
+        let path = self.parse_path(false)?;
         let mut spec = self.var_spec_from_path(&path);
         self.parse_var_spec_suffix(&mut spec)?;
 
@@ -1464,7 +1461,7 @@ impl<'a, 't> Parser<'a, 't> {
             if self.consume(Token::ParenRight) {
                 None
             } else {
-                let path = self.parse_path()?;
+                let path = self.parse_path(false)?;
                 let mut spec = self.var_spec_from_path(&path);
                 self.parse_var_spec_suffix(&mut spec)?;
                 self.expect_next(Token::ParenRight)?;
@@ -1508,7 +1505,7 @@ impl<'a, 't> Parser<'a, 't> {
 
     fn parse_var_statements(&mut self, prefix: Option<&TreePath>, out: &mut Vec<Statement>) -> ParseResult<bool> {
         loop {
-            let parsed = self.parse_path()?;
+            let parsed = self.parse_path(false)?;
             let path = match prefix {
                 Some(prefix) => prefix.concat(&parsed),
                 None => parsed,
@@ -1982,7 +1979,7 @@ impl<'a, 't> Parser<'a, 't> {
     }
 
     fn parse_path_expression(&mut self) -> ParseResult<ExpressionId> {
-        let path = self.parse_path()?;
+        let path = self.parse_path(false)?;
         if self.peek_is(Token::BraceLeft) {
             self.parse_modified_type(path)
         } else {
@@ -2291,6 +2288,23 @@ mod tests {
             ["obj", "static"]
         );
         assert!(modifiers.is_tmp);
+    }
+
+    #[test]
+    fn bare_const_declares_a_constant_of_the_rest_of_the_path() {
+        let ast = parse_source(fixture!(
+            "programs/bare_const_declares_a_constant_of_the_rest_of_the_path.dm"
+        ));
+        let Declaration::Proc { params, .. } = &ast.declarations[0] else {
+            panic!("expected a proc")
+        };
+
+        let param = &params[0].spec;
+        assert_eq!(
+            param.var_type.as_ref().map(TreePath::to_string).as_deref(),
+            Some("/obj")
+        );
+        assert!(param.modifiers.is_const);
     }
 
     #[test]
