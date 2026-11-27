@@ -13,7 +13,7 @@ use crate::{
     search,
     tool::{
         PlacementKind, ToolEdit,
-        place::{is_missing_base, placement_kind, refill_missing_bases},
+        place::{placement_kind, refill_missing_bases},
     },
 };
 
@@ -69,15 +69,6 @@ pub fn delete_instances(
     let editable = editable_instances(document, tree, source, instances);
 
     search::delete_instances(document, tree, world, &editable)
-}
-
-pub fn missing_base_tiles(document: &MapDocument) -> Vec<Coord> {
-    let size = document.map.size();
-
-    (1..=size.z)
-        .flat_map(|z| (1..=size.y).flat_map(move |y| (1..=size.x).map(move |x| Coord::new(x, y, z))))
-        .filter(|coord| document.map.tile_at(*coord).is_some_and(|tile| is_missing_base(tile)))
-        .collect()
 }
 
 pub fn fill_missing_bases(

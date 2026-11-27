@@ -348,7 +348,7 @@ impl Session {
             .active()
             .into_iter()
             .chain(self.state.document_ids())
-            .find(|id| !self.map_issues(*id).is_empty());
+            .find(|id| !self.map_issues(*id).is_empty() || self.has_tile_issues(*id));
 
         report
     }
