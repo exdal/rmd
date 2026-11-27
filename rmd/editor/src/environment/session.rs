@@ -4,10 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use base::{
-    types::{Identifier, Value},
-    vars,
-};
+use base::types::Value;
 
 use dmi::IconFile;
 use dmm::{Map, error::MapError};
@@ -419,7 +416,7 @@ impl Session {
             .filter(|state| seen.insert(state.name.as_str()))
             .map(|state| {
                 let mut variant = prefab.clone();
-                variant.set_var(Identifier::from(vars::ICON_STATE), Value::Text(state.name.clone()));
+                variant.set_var(self.builtins.icon_state.clone(), Value::Text(state.name.clone()));
                 variant
             })
             .collect()

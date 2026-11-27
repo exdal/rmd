@@ -1,7 +1,6 @@
 use base::{
     path::TreePath,
     types::{Identifier, Value},
-    vars,
 };
 
 use defines::SIDE_MAP;
@@ -47,7 +46,7 @@ impl World {
         let name = tree
             .roots()
             .world
-            .and_then(|world| tree.var_inherited(world, &Identifier::from(vars::NAME)))
+            .and_then(|world| tree.var_inherited(world, &tree.builtins().name))
             .and_then(|var| var.value.as_text())
             .filter(|name| !name.is_empty())
             .map(str::to_owned);

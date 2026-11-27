@@ -11,6 +11,7 @@ defines.workspace = true
 libloading = "0.8"
 objtree.workspace = true
 prelude.workspace = true
+rustc-hash.workspace = true
 serde.workspace = true
 simd-json = "0.18"
 toml.workspace = true

@@ -3,6 +3,7 @@ use base::{
     location::Location,
     path::TreePath,
     types::{Identifier, ProcKind, TypeSpec, Value, VarModifiers},
+    vars,
 };
 use prelude::Intrinsic;
 use std::collections::{HashMap, HashSet};
@@ -12,6 +13,69 @@ pub struct ObjectTree {
     /// Keyed by path segments
     by_path: HashMap<Vec<Identifier>, TypeId>,
     roots: Roots,
+    builtins: Builtins,
+}
+
+/// Names of the `stddef.dm` and `stddef_ext.dm` vars the runtime reads on its own
+pub struct Builtins {
+    pub name: Identifier,
+    pub tag: Identifier,
+    pub r#type: Identifier,
+    pub parent_type: Identifier,
+    pub vars: Identifier,
+    pub appearance: Identifier,
+    pub icon: Identifier,
+    pub icon_state: Identifier,
+    pub dir: Identifier,
+    pub layer: Identifier,
+    pub plane: Identifier,
+    pub transform: Identifier,
+    pub overlays: Identifier,
+    pub underlays: Identifier,
+    pub opacity: Identifier,
+    pub invisibility: Identifier,
+    pub pixel_x: Identifier,
+    pub pixel_y: Identifier,
+    pub pixel_w: Identifier,
+    pub pixel_z: Identifier,
+    pub step_x: Identifier,
+    pub step_y: Identifier,
+    pub icon_size: Identifier,
+    pub matrix: [Identifier; 6],
+    /// `/regex`
+    pub flags: Identifier,
+}
+
+impl Default for Builtins {
+    fn default() -> Self {
+        Self {
+            name: Identifier::from(vars::NAME),
+            tag: Identifier::from(vars::TAG),
+            r#type: Identifier::from(vars::TYPE),
+            parent_type: Identifier::from(vars::PARENT_TYPE),
+            vars: Identifier::from(vars::VARS),
+            appearance: Identifier::from(vars::APPEARANCE),
+            icon: Identifier::from(vars::ICON),
+            icon_state: Identifier::from(vars::ICON_STATE),
+            dir: Identifier::from(vars::DIR),
+            layer: Identifier::from(vars::LAYER),
+            plane: Identifier::from(vars::PLANE),
+            transform: Identifier::from(vars::TRANSFORM),
+            overlays: Identifier::from(vars::OVERLAYS),
+            underlays: Identifier::from(vars::UNDERLAYS),
+            opacity: Identifier::from(vars::OPACITY),
+            invisibility: Identifier::from(vars::INVISIBILITY),
+            pixel_x: Identifier::from(vars::PIXEL_X),
+            pixel_y: Identifier::from(vars::PIXEL_Y),
+            pixel_w: Identifier::from(vars::PIXEL_W),
+            pixel_z: Identifier::from(vars::PIXEL_Z),
+            step_x: Identifier::from(vars::STEP_X),
+            step_y: Identifier::from(vars::STEP_Y),
+            icon_size: Identifier::from(vars::ICON_SIZE),
+            matrix: ["a", "b", "c", "d", "e", "f"].map(Identifier::from),
+            flags: Identifier::from(vars::FLAGS),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +119,7 @@ pub struct Roots {
     pub alist: Option<TypeId>,
     pub image: Option<TypeId>,
     pub mutable_appearance: Option<TypeId>,
+    pub matrix: Option<TypeId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -151,11 +216,16 @@ impl ObjectTree {
             by_path: HashMap::from([(Vec::new(), TypeId::ROOT)]),
             types: vec![root],
             roots: Roots::default(),
+            builtins: Builtins::default(),
         }
     }
 
     pub fn roots(&self) -> Roots {
         self.roots
+    }
+
+    pub fn builtins(&self) -> &Builtins {
+        &self.builtins
     }
 
     /// a `var/global` on the root is an ordinary global and keeps its name
@@ -263,6 +333,7 @@ impl ObjectTree {
             [alist] if alist.as_str() == "alist" => &mut self.roots.alist,
             [image] if image.as_str() == "image" => &mut self.roots.image,
             [appearance] if appearance.as_str() == "mutable_appearance" => &mut self.roots.mutable_appearance,
+            [matrix] if matrix.as_str() == "matrix" => &mut self.roots.matrix,
             [atom, movable] if atom.as_str() == "atom" && movable.as_str() == "movable" => &mut self.roots.movable,
             _ => return,
         };

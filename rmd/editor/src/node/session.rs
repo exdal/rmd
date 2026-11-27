@@ -1,8 +1,4 @@
-use base::{
-    coord::Coord,
-    types::{Identifier, Value},
-    vars,
-};
+use base::{coord::Coord, types::Value};
 use std::collections::{HashMap, HashSet};
 
 use prefab::{Prefab, PrefabInstanceId};
@@ -677,9 +673,9 @@ impl Session {
                 let prefab = placed.prefab_mut();
                 let inherited = visual::resolve(tree, &Prefab::new(prefab.path.clone())).dir;
                 if inherited == direction {
-                    prefab.remove_var(&Identifier::from(vars::DIR));
+                    prefab.remove_var(&tree.builtins().dir);
                 } else {
-                    prefab.set_var(Identifier::from(vars::DIR), Value::Num(direction as f32));
+                    prefab.set_var(tree.builtins().dir.clone(), Value::Num(direction as f32));
                 }
             }
 

@@ -1,7 +1,4 @@
-use base::{
-    path::TreePath,
-    types::{Identifier, Value},
-};
+use base::{path::TreePath, types::Value};
 use std::{
     path::PathBuf,
     sync::{
@@ -11,6 +8,7 @@ use std::{
 };
 
 use dmm::{Map, Size};
+use objtree::Builtins;
 
 use super::*;
 use crate::{
@@ -680,7 +678,8 @@ fn absent_generated_icons_stay_missing_and_are_retried() {
 
 #[test]
 fn icon_names_follow_overlays_and_underlays_and_keep_only_dmi() {
-    let icon = |name: &str| (Identifier::from(vars::ICON), Value::Resource(name.into()));
+    let builtins = Builtins::default();
+    let icon = |name: &str| (builtins.icon.clone(), Value::Resource(name.into()));
     let delta = AppearanceDelta {
         vars: vec![icon("a.dmi")],
         overlays: vec![AppearanceDelta {
@@ -697,7 +696,7 @@ fn icon_names_follow_overlays_and_underlays_and_keep_only_dmi() {
                 ..Default::default()
             },
             AppearanceDelta {
-                vars: vec![(Identifier::from(vars::ICON_STATE), Value::Text("e.dmi".into()))],
+                vars: vec![(builtins.icon_state.clone(), Value::Text("e.dmi".into()))],
                 ..Default::default()
             },
         ],

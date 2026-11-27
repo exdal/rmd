@@ -2,7 +2,11 @@ use base::{
     path::TreePath,
     types::{Identifier, ProcId},
 };
-use std::{collections::HashMap, sync::Arc};
+use rustc_hash::{FxHashMap, FxHasher};
+use std::{
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use crate::{external::ExternalFunction, heap::ObjectId};
 
@@ -197,45 +201,48 @@ impl PartialEq for GenericValue {
 
 impl GenericValue {
     pub(crate) fn hash_key(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        std::mem::discriminant(self).hash(&mut hash);
+        let mut hash = FxHasher::default();
+        self.hash_into(&mut hash);
+        hash.finish()
+    }
+
+    pub(crate) fn hash_into(&self, hash: &mut impl Hasher) {
+        std::mem::discriminant(self).hash(hash);
         match self {
-            Self::Num(n) => (if *n == 0.0 { 0 } else { n.to_bits() }).hash(&mut hash),
-            Self::Text(s) | Self::Resource(s) => s.hash(&mut hash),
+            Self::Num(n) => (if *n == 0.0 { 0 } else { n.to_bits() }).hash(hash),
+            Self::Text(s) | Self::Resource(s) => s.hash(hash),
             Self::Path(p) => {
-                p.segments.hash(&mut hash);
+                p.segments.hash(hash);
                 p.flags
                     .intersects(base::path::PathFlags::IS_PROC | base::path::PathFlags::IS_VERB)
-                    .hash(&mut hash);
+                    .hash(hash);
             },
-            Self::List(id) => id.hash(&mut hash),
-            Self::ArgList(id) => id.hash(&mut hash),
-            Self::Iterator(id) => id.hash(&mut hash),
+            Self::List(id) => id.hash(hash),
+            Self::ArgList(id) => id.hash(hash),
+            Self::Iterator(id) => id.hash(hash),
             Self::Range(range) => {
-                range.start.to_bits().hash(&mut hash);
-                range.end.to_bits().hash(&mut hash);
-                range.step.to_bits().hash(&mut hash);
+                range.start.to_bits().hash(hash);
+                range.end.to_bits().hash(hash);
+                range.step.to_bits().hash(hash);
             },
             Self::ModifiedType(value) => {
-                value.path.segments.hash(&mut hash);
+                value.path.segments.hash(hash);
                 for (name, value) in &value.overrides {
-                    name.hash(&mut hash);
-                    value.hash_key().hash(&mut hash);
+                    name.hash(hash);
+                    value.hash_into(hash);
                 }
             },
-            Self::Object(id) => id.hash(&mut hash),
+            Self::Object(id) => id.hash(hash),
             Self::Proc(p) => {
-                p.src.hash(&mut hash);
-                p.proc.hash(&mut hash);
+                p.src.hash(hash);
+                p.proc.hash(hash);
             },
             Self::External(function) => {
-                function.library.hash(&mut hash);
-                function.name.hash(&mut hash);
+                function.library.hash(hash);
+                function.name.hash(hash);
             },
             _ => {},
         }
-        hash.finish()
     }
 }
 
@@ -252,7 +259,7 @@ pub enum ListKind {
 pub struct ListData {
     pub entries: Vec<(GenericValue, Option<GenericValue>)>,
     pub kind: ListKind,
-    index: HashMap<u64, Vec<usize>>,
+    index: FxHashMap<u64, Vec<usize>>,
 }
 
 impl PartialEq for ListData {

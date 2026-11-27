@@ -55,7 +55,11 @@ fn edited_candidate(tree: &ObjectTree, prefab: &Prefab, count: u32) -> Option<Pr
     let details = override_lines(prefab).join(", ");
 
     Some(PrefabCandidate {
-        haystack: Haystack::new(&path, Some(&display_name(Some(tree), prefab)), Some(&details)),
+        haystack: Haystack::new(
+            &path,
+            Some(&display_name(Some(tree), tree.builtins(), prefab)),
+            Some(&details),
+        ),
         details,
         prefab: prefab.clone(),
         path,
@@ -83,7 +87,7 @@ pub(super) fn build_prefabs(session: &Session, placed: &[(Prefab, u32)]) -> Vec<
             let prefab = Prefab::new(TreePath::parse(&path));
 
             PrefabCandidate {
-                haystack: Haystack::new(&path, Some(&display_name(Some(tree), &prefab)), None),
+                haystack: Haystack::new(&path, Some(&display_name(Some(tree), tree.builtins(), &prefab)), None),
                 count: counts.get(&path).copied().unwrap_or(0),
                 prefab,
                 path,
@@ -134,7 +138,7 @@ pub(super) fn build_areas(session: &Session, placed: &[(Prefab, u32)]) -> Vec<Ar
         .filter_map(|(prefab, count)| {
             tree.id_of(&prefab.path).filter(|id| tree.is_subtype_of(*id, root))?;
             let path = prefab.path.to_string();
-            let name = display_name(Some(tree), prefab);
+            let name = display_name(Some(tree), tree.builtins(), prefab);
 
             Some(AreaCandidate {
                 haystack: Haystack::new(&path, Some(&name), None),
