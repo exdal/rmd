@@ -470,7 +470,7 @@
 		else
 			blind += list(list(T.x - origin.x, T.y - origin.y))
 
-	var/when = DEMIR_HIGHLIGHT_SELECTED | DEMIR_HIGHLIGHT_HOVERED
+	var/when = DEMIR_HIGHLIGHT_SELECTED
 	return list(
 		list("tiles" = seen, "color" = "#40c040", "fill" = 0.25, "when" = when),
 		list("tiles" = blind, "color" = "#e04040", "fill" = 0.25, "when" = when),
