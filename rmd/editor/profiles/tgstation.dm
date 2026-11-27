@@ -26,6 +26,14 @@
 /datum/controller/subsystem/mapping/demir_preview/level_trait(z, trait)
 	return null
 
+// CHECK_TICK reads the tick limit. The preview never sleeps.
+/datum/controller/master/demir_preview/New()
+	Master = src
+
+// to_chat() sends through SSchat to GLOB.clients, which is empty in the preview.
+/datum/controller/subsystem/chat/demir_preview/New()
+	SSchat = src
+
 /datum/controller/subsystem/overlays/demir_preview/New()
 	SSoverlays = src
 	stats = list()
@@ -97,6 +105,15 @@
 		SSicon_smooth = new /datum/controller/subsystem/icon_smooth/demir_preview
 	if(!SSgreyscale && demir_trusted())
 		SSgreyscale = new /datum/controller/subsystem/processing/greyscale/demir_preview
+
+	// All these three below needs to be initialized because terraingen touches these...
+	if(!Master)
+		Master = new /datum/controller/master/demir_preview
+	if(!SSchat)
+		SSchat = new /datum/controller/subsystem/chat/demir_preview
+	if(!logger)
+		logger = new /datum/log_holder
+
 	bitflag_lists = list()
 	gvars_datum_init_order = list()
 	InitGlobalcardinals()
@@ -114,6 +131,9 @@
 	InitGlobalareas()
 	InitGlobalareas_by_type()
 	InitGlobalstation_levels_cache()
+	InitGlobalclients()
+	InitGlobalmap_generators_by_z()
+	InitGlobalmegafauna_spawn_list()
 
 /atom/proc/demir_prepare_smoothing()
 	SETUP_SMOOTHING()
@@ -397,6 +417,18 @@
 
 /datum/demir/tgstation/highlights(atom/target)
 	return target.demir_highlights()
+
+// Calling `new` on any atoms is allowed here.
+/datum/demir/tgstation/generate()
+
+	// The terrain generator needs rustg.
+	if(demir_trusted())
+		SSmapping.biomes = init_subtypes_w_path_keys(/datum/biome)
+		for(var/area/area in world)
+			area.demir_prepare_state()
+
+		SSmapping.run_map_terrain_generation()
+		SSmapping.run_map_terrain_population()
 
 /datum/demir/tgstation/process_modular_root(list/roots)
 	var/list/configs = list()

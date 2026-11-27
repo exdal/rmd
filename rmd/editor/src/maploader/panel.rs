@@ -11,7 +11,7 @@ use ui::{
 use crate::{
     frontend::welcome::codebase_relative,
     inspector::panel::IDENTICAL_EDIT_COLOR,
-    maploader::preview::{ModuleRootPreview, ModuleVariantKey},
+    maploader::preview::{ModuleOrigin, ModuleRootPreview, ModuleVariantKey},
     session::Session,
     tool::Tool,
     viewport::{
@@ -55,7 +55,14 @@ pub(crate) fn draw(
             open,
         };
     }
-    let roots = session.module_roots().to_vec();
+
+    let roots = session
+        .module_roots()
+        .iter()
+        .filter(|root| root.key.origin != ModuleOrigin::Generated)
+        .cloned()
+        .collect::<Vec<_>>();
+
     if let Some((key, coord)) = frame.gestures.module_popup.as_mut() {
         match roots
             .iter()

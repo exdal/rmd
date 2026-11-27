@@ -17,6 +17,7 @@ pub enum Stage {
     ParseMap,
     Instantiate,
     Initialize,
+    Generate,
     Prepare,
     Connections,
     Highlights,
@@ -40,6 +41,7 @@ impl Stage {
             Self::ParseMap => "Parsing map",
             Self::Instantiate => "Instantiating atoms",
             Self::Initialize => "Constructing profile",
+            Self::Generate => "Generating atoms",
             Self::Prepare => "Preparing atoms",
             Self::Connections => "Collecting connections",
             Self::Highlights => "Collecting highlights",
@@ -53,6 +55,7 @@ impl Stage {
         match stage {
             vm::bake::Stage::Instantiate => Self::Instantiate,
             vm::bake::Stage::Initialize => Self::Initialize,
+            vm::bake::Stage::Generate => Self::Generate,
             vm::bake::Stage::Prepare => Self::Prepare,
             vm::bake::Stage::Connections => Self::Connections,
             vm::bake::Stage::Highlights => Self::Highlights,
@@ -81,6 +84,7 @@ impl Stage {
             Self::Light => 13,
             Self::Smooth => 14,
             Self::Modules => 17,
+            Self::Generate => 18,
         }
     }
 
@@ -103,6 +107,7 @@ impl Stage {
             13 => Self::Light,
             14 => Self::Smooth,
             17 => Self::Modules,
+            18 => Self::Generate,
             _ => Self::Preprocess,
         }
     }
@@ -196,6 +201,7 @@ mod tests {
             Stage::ParseMap,
             Stage::Instantiate,
             Stage::Initialize,
+            Stage::Generate,
             Stage::Prepare,
             Stage::Connections,
             Stage::Light,

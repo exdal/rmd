@@ -35,13 +35,14 @@ pub struct ModuleVariantKey {
 pub enum ModuleOrigin {
     Atom(PrefabInstanceId),
     Coord(Coord),
+    Generated,
 }
 
 impl ModuleOrigin {
     pub fn atom(self) -> Option<PrefabInstanceId> {
         match self {
             Self::Atom(id) => Some(id),
-            Self::Coord(_) => None,
+            Self::Coord(_) | Self::Generated => None,
         }
     }
 }

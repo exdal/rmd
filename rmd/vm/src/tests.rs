@@ -1,11 +1,15 @@
 use base::{
     arena::StrArena,
+    coord::Coord,
     path::TreePath,
     types::{Identifier, Value},
 };
 use std::{
     collections::{HashMap, HashSet},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use codegen::ProcIndex;
@@ -16,8 +20,8 @@ use crate::{
     ExternalAccess, Fault, FaultKind, GenericValue, IconStates, Limits, Runtime,
     bake::{
         Atom, Bake, BakeUpdate, HIGHLIGHT_ALWAYS, HIGHLIGHT_EDGE_NORTH, HIGHLIGHT_EDGE_SOUTH, HIGHLIGHT_EDGE_WEST,
-        HIGHLIGHT_SELECTED, HighlightTile, ModuleRoot, NodePortRule, PendingBake, ProfileError, Stage, has_profile,
-        host_reads, profile_catalog, profile_type, selected_profile_type,
+        HIGHLIGHT_SELECTED, HighlightTile, ModuleRoot, ModuleSource, NodePortRule, PendingBake, ProfileError, Stage,
+        has_profile, host_reads, profile_catalog, profile_type, selected_profile_type,
     },
     eval::Evaluator,
     heap::{Object, ObjectId},
@@ -4018,7 +4022,13 @@ fn pending<'a>(
 
 fn module_files<'a>(modules: impl Iterator<Item = (u64, &'a ModuleRoot)>) -> Vec<(u64, Vec<&'a str>)> {
     let mut files = modules
-        .map(|(id, root)| (id, root.files.iter().map(String::as_str).collect()))
+        .map(|(id, root)| {
+            let ModuleSource::Files(files) = &root.source else {
+                panic!("placements name files");
+            };
+
+            (id, files.iter().map(String::as_str).collect())
+        })
         .collect::<Vec<_>>();
     files.sort();
 
@@ -4138,7 +4148,7 @@ fn placement_entries_become_module_roots_and_errors() {
     assert_eq!(
         modules.get(&id("empty")),
         Some(&&ModuleRoot {
-            files: Vec::new(),
+            source: ModuleSource::Files(Vec::new()),
             anchor: None,
             skip: Vec::new(),
             offset: [0; 3],
@@ -4147,7 +4157,7 @@ fn placement_entries_become_module_roots_and_errors() {
     assert_eq!(
         modules.get(&id("full")),
         Some(&&ModuleRoot {
-            files: vec!["a.dmm".into(), "b.dmm".into(), "a.dmm".into()],
+            source: ModuleSource::Files(vec!["a.dmm".into(), "b.dmm".into(), "a.dmm".into()]),
             anchor: Some(ty("/obj/connector")),
             skip: vec![ty("/turf/hole"), ty("/area/hole")],
             offset: [0; 3],
@@ -4435,7 +4445,7 @@ fn at_entries_from_new_are_kept_per_coordinate_and_outlive_atoms() {
         (
             Position::new(5, 2, 1),
             Ok(ModuleRoot {
-                files: vec!["a.dmm".into()],
+                source: ModuleSource::Files(vec!["a.dmm".into()]),
                 anchor: None,
                 skip: Vec::new(),
                 offset: [0; 3],
@@ -4444,7 +4454,7 @@ fn at_entries_from_new_are_kept_per_coordinate_and_outlive_atoms() {
         (
             Position::new(9, 1, 2),
             Ok(ModuleRoot {
-                files: vec!["b.dmm".into(), "c.dmm".into()],
+                source: ModuleSource::Files(vec!["b.dmm".into(), "c.dmm".into()]),
                 anchor: Some(ty("/obj/connector")),
                 skip: vec![ty("/turf/hole")],
                 offset: [1, -2, 3],
@@ -4453,7 +4463,7 @@ fn at_entries_from_new_are_kept_per_coordinate_and_outlive_atoms() {
         (
             Position::new(40, 40, 40),
             Ok(ModuleRoot {
-                files: Vec::new(),
+                source: ModuleSource::Files(Vec::new()),
                 anchor: None,
                 skip: Vec::new(),
                 offset: [0; 3],
@@ -4961,6 +4971,187 @@ fn new_turf_without_a_turf_on_the_map_allocates_a_new_object() {
     let (_, bake) = bake_with_a_turf_under_a_probe("/datum/demir/ignored");
 
     assert_eq!(baked_state(&bake, 3), Some("0-0-1-atom-1-1-"));
+}
+
+fn bake_generate_fixture(profile: &str, size: [i32; 3], is_generating: bool) -> (ObjectTree, Bake, Vec<Stage>) {
+    let (tree, module) = compile(fixture!("programs/generate_captures_what_it_places.dm"));
+    let turf = tree.id_of(&TreePath::parse("/turf/a")).unwrap();
+    let mut atoms = Vec::new();
+    for y in 1..=size[1] {
+        for x in 1..=size[0] {
+            atoms.push(Atom {
+                instance: atoms.len() as u64 + 1,
+                ty: turf,
+                position: Position::new(x, y, 1),
+                vars: Vec::new(),
+            });
+        }
+    }
+
+    let mut stages = Vec::new();
+    let mut record = |stage, _, _| {
+        if stages.last() != Some(&stage) {
+            stages.push(stage);
+        }
+    };
+    let bake = if is_generating {
+        let mut pending = Bake::initialize_with_profile_and_progress(
+            &tree,
+            &module,
+            profile_at(&tree, profile),
+            atoms,
+            size,
+            Limits::default(),
+            IconStates::default(),
+            None,
+            None,
+            &mut record,
+        );
+        pending.generate(&mut record);
+        pending.finish_with_progress(&mut record)
+    } else {
+        Bake::with_profile_and_progress(
+            &tree,
+            &module,
+            profile_at(&tree, profile),
+            atoms,
+            size,
+            Limits::default(),
+            IconStates::default(),
+            None,
+            None,
+            &mut record,
+        )
+    };
+
+    (tree, bake, stages)
+}
+
+fn generating_bake(profile: &str, size: [i32; 3]) -> (ObjectTree, Bake, Vec<Stage>) {
+    bake_generate_fixture(profile, size, true)
+}
+
+fn generated_map(bake: &Bake) -> Option<&Arc<dmm::Map>> {
+    match &bake.generated()?.source {
+        ModuleSource::Generated(map) => Some(map),
+        ModuleSource::Files(_) => None,
+    }
+}
+
+fn generated_tile(bake: &Bake, x: u32, y: u32) -> Option<Vec<String>> {
+    let tile = generated_map(bake)?.tile_at(Coord::new(x, y, 1))?;
+
+    Some(tile.iter().map(|prefab| prefab.path.to_string()).collect())
+}
+
+#[test]
+fn generate_captures_the_turfs_and_atoms_it_placed() {
+    let (_, bake, _) = generating_bake("/datum/demir/terrain", [4, 2, 1]);
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+
+    assert_eq!(generated_tile(&bake, 1, 1), Some(vec!["/turf/b".into()]));
+    assert_eq!(
+        generated_tile(&bake, 2, 1),
+        Some(vec!["/obj/rock".into(), "/obj/tree".into(), "/turf/b".into()])
+    );
+    assert_eq!(generated_tile(&bake, 3, 1), Some(vec!["/obj/rock".into()]));
+    assert_eq!(generated_tile(&bake, 4, 1), None);
+    for x in 1..=4 {
+        assert_eq!(generated_tile(&bake, x, 2), None, "x {x}");
+    }
+
+    let map = generated_map(&bake).unwrap();
+    assert_eq!(map.size, dmm::Size { x: 4, y: 2, z: 1 });
+    assert_eq!(map.dictionary.len(), 3);
+}
+
+#[test]
+fn generate_discards_every_heap_write() {
+    let (tree, bake, _) = generating_bake("/datum/demir/terrain", [4, 2, 1]);
+    let original = tree.id_of(&TreePath::parse("/turf/a")).unwrap();
+
+    for instance in 1..=8 {
+        let index = instance as i32 - 1;
+        let id = bake.object(instance).unwrap();
+        assert_eq!(
+            bake.runtime
+                .world
+                .turf_at(Position::new(index % 4 + 1, index / 4 + 1, 1)),
+            Some(id)
+        );
+
+        let object = bake.runtime.heap.object(id).unwrap();
+        assert_eq!(object.ty, original);
+        assert!(object.contents.is_empty());
+    }
+
+    let rock = tree.id_of(&TreePath::parse("/obj/rock")).unwrap();
+    assert!(
+        !bake
+            .runtime
+            .heap
+            .objects
+            .iter()
+            .any(|object| object.ty == rock && !object.deleted)
+    );
+}
+
+#[test]
+fn a_faulting_generate_records_a_diagnostic_and_leaves_no_layer() {
+    let (_, bake, stages) = generating_bake("/datum/demir/faulting", [2, 1, 1]);
+
+    assert_eq!(bake.diagnostics.count(), 1);
+    assert!(bake.generated().is_none());
+    assert!(stages.contains(&Stage::Generate));
+    assert!(bake.object(1).is_some());
+}
+
+#[test]
+fn a_profile_without_generate_reports_no_generate_stage() {
+    let (_, bake, stages) = generating_bake("/datum/demir/plain", [2, 1, 1]);
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    assert!(bake.generated().is_none());
+    assert!(!stages.contains(&Stage::Generate));
+}
+
+#[test]
+fn a_bake_without_the_explicit_step_never_generates() {
+    let (_, bake, stages) = bake_generate_fixture("/datum/demir/terrain", [4, 2, 1], false);
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    assert!(bake.generated().is_none());
+    assert!(!stages.contains(&Stage::Generate));
+}
+
+#[test]
+fn generate_runs_between_initialize_and_prepare() {
+    let (_, _, stages) = generating_bake("/datum/demir/terrain", [4, 2, 1]);
+
+    assert_eq!(
+        stages,
+        [
+            Stage::Instantiate,
+            Stage::Initialize,
+            Stage::Generate,
+            Stage::Prepare,
+            Stage::Connections,
+            Stage::Highlights,
+            Stage::Light,
+            Stage::Smooth,
+        ]
+    );
+}
+
+#[test]
+fn the_generate_budget_scales_with_the_world() {
+    let (_, small, _) = generating_bake("/datum/demir/looping", [1, 1, 1]);
+    assert_eq!(small.diagnostics.count(), 1);
+    assert!(small.generated().is_none());
+
+    let (_, large, _) = generating_bake("/datum/demir/looping", [20, 20, 1]);
+    assert_eq!(large.diagnostics.count(), 0, "{:?}", large.diagnostics);
+    assert_eq!(generated_tile(&large, 1, 1), Some(vec!["/obj/rock".into()]));
 }
 
 #[test]

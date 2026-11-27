@@ -10,10 +10,10 @@ use crate::{
     maploader::{
         ErrorKind,
         fixtures::{
-            COORDINATE_PROFILE, Fixture, MODULE, ROOT, TestResult, WALL, assert_settled, coord, effective_paths, has,
-            keyed, open_document, place_in, show,
+            COORDINATE_PROFILE, Fixture, GENERATE_PROFILE, MODULE, ROOT, TestResult, WALL, assert_settled, coord,
+            effective_paths, has, keyed, open_document, place_in, show,
         },
-        preview::{ModuleRootPreview, PREVIEW_ID_START},
+        preview::{ModuleOrigin, ModuleRootPreview, PREVIEW_ID_START},
     },
     session::{BakeHold, Session, fixtures::settle_bake},
     testing::prefab,
@@ -168,6 +168,35 @@ fn a_coordinate_modules_turf_replaces_the_source_turf_and_settles() -> TestResul
     assert!(has(&session, 4, WALL));
     assert!(!has(&session, 4, "/turf/open/floor"));
     assert_settled(&session);
+
+    Ok(())
+}
+
+#[test]
+fn generated_terrain_shows_in_the_composite_settles_and_never_reaches_the_file() -> TestResult {
+    let fixture = Fixture::new(&[])?;
+    let original = fs::read(fixture.dir.join("main.dmm"))?;
+    let mut session = fixture.session_with(GENERATE_PROFILE)?;
+
+    assert_eq!(session.module_roots().len(), 1);
+    assert_eq!(session.module_roots()[0].key.origin, ModuleOrigin::Generated);
+    assert!(session.module_roots()[0].marker.is_none());
+    assert!(session.source_root(&session.module_roots()[0]).is_none());
+    assert!(has(&session, 3, WALL));
+    assert!(!has(&session, 3, "/turf/open/floor"));
+    assert!(has(&session, 3, "/area/station"));
+    assert!(has(&session, 4, MODULE));
+    assert!(has(&session, 4, "/turf/open/floor"));
+    assert!(!has(&session, 2, WALL));
+    assert!(source_paths(&session, 3).contains(&String::from("/turf/open/floor")));
+    assert!(preview_ids(&session).iter().all(|id| is_baked(&session, *id)));
+    assert!(!session.can_edit_at(coord(3)));
+    assert!(session.can_edit_at(coord(2)));
+    assert_settled(&session);
+
+    let target = fixture.dir.join("saved.dmm");
+    session.save_map_as(&target, MapFormat::Standard)?;
+    assert_eq!(fs::read(&target)?, original);
 
     Ok(())
 }

@@ -351,6 +351,7 @@ impl ModuleTarget for Live<'_> {
             self.bake.module_faults(),
             self.bake.module_errors(),
             self.bake.coordinate_modules(),
+            self.bake.generated(),
         )
     }
 
@@ -372,6 +373,7 @@ impl ModuleTarget for Pending<'_, '_> {
             self.pending.module_faults(),
             self.pending.module_errors(),
             self.pending.coordinate_modules(),
+            self.pending.generated(),
         )
     }
 
@@ -460,6 +462,9 @@ pub fn build_map(
             .and_then(|path| file_path::relative(environment.base_dir(), path)),
         report(progress, &mut current),
     );
+
+    let mut current = None;
+    pending.generate(report(progress, &mut current));
 
     if pending.modules().next().is_some() || pending.module_faults().next().is_some() {
         progress.enter(Stage::Modules, 0);

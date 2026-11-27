@@ -10,7 +10,7 @@ use std::{
 use dmm::{Map, Size};
 use objtree::{ObjectTree, TypeId};
 use prefab::{Prefab, PrefabInstanceId};
-use vm::bake::ModuleRoot;
+use vm::bake::{ModuleRoot, ModuleSource};
 
 use super::{
     ModuleChoices, ModuleOrigin, ModuleOverlay, ModuleRootKey, ModuleRootPreview, ModuleVariantKey,
@@ -120,6 +120,18 @@ pub(super) fn update(
             *coord,
             None,
             spec,
+        );
+    }
+
+    if let Some(generated) = &specs.generated {
+        composer.root(
+            ModuleRootKey {
+                origin: ModuleOrigin::Generated,
+                ancestry: Vec::new(),
+            },
+            Coord::new(1, 1, 1),
+            None,
+            &Ok(generated.clone()),
         );
     }
 
@@ -253,28 +265,45 @@ impl ModuleComposer<'_> {
         let mut occurrences = HashMap::<PathBuf, usize>::new();
         let mut variants = Vec::new();
         let mut loaded = Vec::new();
-        for file in &spec.files {
-            let resolved = resolve_module_path(self.ctx.base_dir, file);
-            let path = resolved.as_ref().map_or_else(
-                |_| PathBuf::from(file_path::forward_slashes(file).as_ref()),
-                Clone::clone,
-            );
-            let result = resolved.and_then(|path| self.open(&key, spec, &path));
-            let error = result
-                .as_ref()
-                .err()
-                .map(|kind| self.diagnostic(&key, coord, &path, kind.clone()));
-            let occurrence = occurrences.entry(path.clone()).or_insert(0);
-            variants.push(ModuleVariantPreview {
-                choice: ModuleVariantKey {
-                    path,
-                    occurrence: *occurrence,
-                },
-                error: error.clone(),
-            });
-            *occurrence += 1;
-            self.preview.diagnostics.extend(error);
-            loaded.push(result.ok());
+        match &spec.source {
+            ModuleSource::Files(files) => {
+                for file in files {
+                    let resolved = resolve_module_path(self.ctx.base_dir, file);
+                    let path = resolved.as_ref().map_or_else(
+                        |_| PathBuf::from(file_path::forward_slashes(file).as_ref()),
+                        Clone::clone,
+                    );
+                    let result = resolved.and_then(|path| self.open(&key, spec, &path));
+                    let error = result
+                        .as_ref()
+                        .err()
+                        .map(|kind| self.diagnostic(&key, coord, &path, kind.clone()));
+                    let occurrence = occurrences.entry(path.clone()).or_insert(0);
+                    variants.push(ModuleVariantPreview {
+                        choice: ModuleVariantKey {
+                            path,
+                            occurrence: *occurrence,
+                        },
+                        error: error.clone(),
+                    });
+                    *occurrence += 1;
+                    self.preview.diagnostics.extend(error);
+                    loaded.push(result.ok());
+                }
+            },
+            ModuleSource::Generated(map) => {
+                variants.push(ModuleVariantPreview {
+                    choice: ModuleVariantKey {
+                        path: PathBuf::from("<generated>"),
+                        occurrence: 0,
+                    },
+                    error: None,
+                });
+                loaded.push(Some((
+                    Arc::new(LoadedModule::new(Arc::clone(map))),
+                    (Coord::new(1, 1, 1), None),
+                )));
+            },
         }
 
         let selected = self
