@@ -4354,6 +4354,7 @@ dependencies = [
  "objtree",
  "prelude",
  "preprocessor",
+ "rustc-hash",
  "sema",
  "serde",
  "simd-json",

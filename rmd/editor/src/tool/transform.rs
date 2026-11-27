@@ -80,8 +80,8 @@ pub(super) fn transform_prefab(tree: &ObjectTree, prefab: &mut Prefab, transform
     };
     let appearance = visual::resolve_id(tree, id, prefab);
     let path_direction = directional_type_group(tree, id).and_then(|(_, direction)| direction);
-    let dir_name = Identifier::from(vars::DIR);
-    let direction = path_direction.or_else(|| match visual::resolve_value(tree, id, prefab, &dir_name) {
+    let dir_name = &tree.builtins().dir;
+    let direction = path_direction.or_else(|| match visual::resolve_value(tree, id, prefab, dir_name) {
         Some(resolved) => resolved.value.as_num().and_then(|value| Dir::from_bits(value as u32)),
         None => Dir::from_bits(appearance.dir),
     });
@@ -90,7 +90,7 @@ pub(super) fn transform_prefab(tree: &ObjectTree, prefab: &mut Prefab, transform
     if let Some(direction) = target_direction {
         if let Some(path) = directional_type_target(tree, id, direction) {
             prefab.path = path;
-            prefab.remove_var(&Identifier::from(vars::DIR));
+            prefab.remove_var(dir_name);
         } else {
             set_resolved_number(tree, prefab, vars::DIR, direction.to_bits() as i32);
         }

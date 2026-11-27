@@ -1,7 +1,6 @@
 use base::{
     path::TreePath,
     types::{Identifier, Value},
-    vars,
 };
 
 use dmi::metadata::Dir;
@@ -35,8 +34,8 @@ pub(crate) struct DirectionState {
     pub directional_types: Option<DirectionalTypes>,
 }
 
-fn direction_mutation(direction: Dir) -> VarMutation {
-    VarMutation::Set(Identifier::from(vars::DIR), Value::Num(direction.to_bits() as f32))
+fn direction_mutation(dir: &Identifier, direction: Dir) -> VarMutation {
+    VarMutation::Set(dir.clone(), Value::Num(direction.to_bits() as f32))
 }
 
 pub(crate) fn direction_state(
@@ -149,7 +148,7 @@ impl Session {
             return self.set_picked_directional_type(direction, group);
         }
 
-        self.edit_picked_instance_vars("set dir", &[direction_mutation(direction)], group)
+        self.edit_picked_instance_vars("set dir", &[direction_mutation(&self.builtins.dir, direction)], group)
     }
 
     pub(crate) fn set_picked_directional_type(&mut self, direction: Dir, group: Option<EditGroupId>) -> Option<bool> {
@@ -173,13 +172,9 @@ impl Session {
             directional_type_target(&environment.tree, id, direction)?
         };
 
-        self.edit_instances_in(
-            scope,
-            "set direction",
-            Some(&path),
-            &[VarMutation::Remove(Identifier::from(vars::DIR))],
-            group,
-        )
+        let dir = self.builtins.dir.clone();
+
+        self.edit_instances_in(scope, "set direction", Some(&path), &[VarMutation::Remove(dir)], group)
     }
 
     fn set_direction_each(&mut self, direction: Dir, group: Option<EditGroupId>) -> Option<bool> {
@@ -195,9 +190,9 @@ impl Session {
                 let (path, mutation) = if directional_types_for(&environment.tree, type_id).is_some() {
                     let target = directional_type_target(&environment.tree, type_id, direction)?;
 
-                    (Some(target), VarMutation::Remove(Identifier::from(vars::DIR)))
+                    (Some(target), VarMutation::Remove(self.builtins.dir.clone()))
                 } else {
-                    (None, direction_mutation(direction))
+                    (None, direction_mutation(&self.builtins.dir, direction))
                 };
 
                 Some(InstanceChange {
@@ -221,20 +216,14 @@ impl Session {
         }
 
         let mut prefab = self.palette()?.clone();
-        let id = self.state.environment.as_ref()?.tree.id_of(&prefab.path)?;
-        let directional = self
-            .state
-            .environment
-            .as_ref()
-            .and_then(|environment| directional_types_for(&environment.tree, id))
-            .is_some();
-
-        if directional {
-            let environment = self.state.environment.as_ref()?;
+        let environment = self.state.environment.as_ref()?;
+        let id = environment.tree.id_of(&prefab.path)?;
+        let dir = self.builtins.dir.clone();
+        if directional_types_for(&environment.tree, id).is_some() {
             prefab.path = directional_type_target(&environment.tree, id, direction)?;
-            prefab.remove_var(&Identifier::from(vars::DIR));
+            prefab.remove_var(&dir);
         } else {
-            prefab.set_var(Identifier::from(vars::DIR), Value::Num(direction.to_bits() as f32));
+            prefab.set_var(dir, Value::Num(direction.to_bits() as f32));
         }
 
         Some(self.state.replace_palette(prefab))
@@ -266,7 +255,7 @@ impl Session {
             .into_iter()
             .map(|direction| {
                 let mut variant = prefab.clone();
-                variant.set_var(Identifier::from(vars::DIR), Value::Num(direction.to_bits() as f32));
+                variant.set_var(self.builtins.dir.clone(), Value::Num(direction.to_bits() as f32));
                 variant
             })
             .collect()

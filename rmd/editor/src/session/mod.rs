@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use objtree::TypeId;
+use objtree::{Builtins, TypeId};
 use prefab::{Prefab, PrefabInstanceId};
 use render::{FrameUpdate, texture::TextureCatalog};
 
@@ -98,6 +98,7 @@ pub struct Session {
     pub(crate) identical: Option<IdenticalCache>,
     pub(crate) coop: Option<Coop>,
     pub(crate) region_state: RegionState,
+    pub(crate) builtins: Builtins,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +146,7 @@ impl Session {
             identical: None,
             coop: None,
             region_state: RegionState::default(),
+            builtins: Builtins::default(),
         }
     }
 

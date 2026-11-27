@@ -5156,3 +5156,27 @@ fn trust_is_visible_to_dm() {
         assert_eq!(value, GenericValue::Num(expected), "{access:?}");
     }
 }
+
+#[test]
+fn the_rng_seed_hashes_the_path_text_without_formatting_it() {
+    use crate::eval::hash_type_path;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let expected = |path: Option<&TreePath>| {
+        let mut seed = DefaultHasher::new();
+        path.map(ToString::to_string).hash(&mut seed);
+        seed.finish()
+    };
+    let actual = |path: Option<&TreePath>| {
+        let mut seed = DefaultHasher::new();
+        hash_type_path(path, &mut seed);
+        seed.finish()
+    };
+
+    for path in ["/", "/datum", "/turf/open/space/basic"] {
+        let path = TreePath::parse(path);
+        assert_eq!(actual(Some(&path)), expected(Some(&path)), "{path}");
+    }
+
+    assert_eq!(actual(None), expected(None));
+}

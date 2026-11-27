@@ -1,7 +1,7 @@
-use base::{bitset::BitIndex, interner::SymbolMap, types::Identifier, vars};
-use std::collections::{HashMap, HashSet};
+use base::{bitset::BitIndex, interner::SymbolMap};
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use objtree::{SharedVarId, TypeId};
+use objtree::{Builtins, SharedVarId, TypeId};
 
 use crate::{
     FaultKind,
@@ -13,9 +13,9 @@ use crate::{
 struct Journal {
     objects_len: usize,
     lists_len: usize,
-    objects: HashMap<ObjectId, Object>,
-    lists: HashMap<ListId, ListData>,
-    statics: HashMap<Static, Option<GenericValue>>,
+    objects: FxHashMap<ObjectId, Object>,
+    lists: FxHashMap<ListId, ListData>,
+    statics: FxHashMap<Static, Option<GenericValue>>,
 }
 
 /// storage every call of a proc, or every instance of a type, shares
@@ -107,8 +107,7 @@ impl Heap {
     }
 
     /// `icon(icon(file, state))` nests, and the outermost kept state or dir wins
-    pub fn icon_source(&self, mut id: ObjectId) -> IconSource<'_> {
-        let [icon, icon_state, dir] = [vars::ICON, vars::ICON_STATE, vars::DIR].map(Identifier::from);
+    pub fn icon_source(&self, mut id: ObjectId, builtins: &Builtins) -> IconSource<'_> {
         let mut source = IconSource::default();
         for _ in 0..8 {
             let Some(object) = self.object(id) else {
@@ -121,9 +120,9 @@ impl Heap {
                     .get(name)
                     .filter(|value| !matches!(value, GenericValue::Null))
             };
-            source.icon_state = source.icon_state.or_else(|| kept(&icon_state));
-            source.dir = source.dir.or_else(|| kept(&dir));
-            match object.vars.get(&icon) {
+            source.icon_state = source.icon_state.or_else(|| kept(&builtins.icon_state));
+            source.dir = source.dir.or_else(|| kept(&builtins.dir));
+            match object.vars.get(&builtins.icon) {
                 Some(GenericValue::Object(inner)) => id = *inner,
                 file => {
                     source.file = file;
@@ -141,9 +140,8 @@ impl Heap {
         Ok(id)
     }
 
-    pub fn alloc_list(&mut self, mut list: ListData) -> Result<ListId, FaultKind> {
+    pub fn alloc_list(&mut self, list: ListData) -> Result<ListId, FaultKind> {
         let id = ListId(u32::try_from(self.lists.len()).map_err(|_| FaultKind::Memory)?);
-        list.reindex();
         self.lists.push(list);
         Ok(id)
     }
@@ -199,9 +197,9 @@ impl Heap {
         self.journal = Some(Journal {
             objects_len: self.objects.len(),
             lists_len: self.lists.len(),
-            objects: HashMap::new(),
-            lists: HashMap::new(),
-            statics: HashMap::new(),
+            objects: FxHashMap::default(),
+            lists: FxHashMap::default(),
+            statics: FxHashMap::default(),
         });
     }
 
@@ -301,7 +299,7 @@ impl Heap {
 
     // one contents scan per parent, where relocate(id, None) per object rescans it every time
     pub(crate) fn detach(&mut self, ids: &[ObjectId]) -> Result<(), FaultKind> {
-        let mut by_parent = HashMap::<ObjectId, HashSet<ObjectId>>::new();
+        let mut by_parent = FxHashMap::<ObjectId, FxHashSet<ObjectId>>::default();
         for id in ids {
             if let Some(parent) = self.object_mut(*id)?.loc.take() {
                 by_parent.entry(parent).or_default().insert(*id);

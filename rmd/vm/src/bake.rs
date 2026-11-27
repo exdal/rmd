@@ -11,6 +11,8 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use rustc_hash::{FxHashMap, FxHashSet};
+
 use codegen::Module;
 use objtree::{ObjectTree, TypeId};
 
@@ -134,8 +136,8 @@ pub(crate) enum PlacementState {
     #[default]
     Idle,
     Task {
-        roots: HashSet<ObjectId>,
-        entries: HashMap<ObjectId, Placement>,
+        roots: FxHashSet<ObjectId>,
+        entries: FxHashMap<ObjectId, Placement>,
     },
 }
 
@@ -287,8 +289,8 @@ struct CacheKey {
 // only the first bake caches appearances, edits and rebakes run every atom
 #[derive(Default)]
 struct AppearanceCache {
-    appearances: HashMap<CacheKey, SharedAppearance>,
-    fingerprints: HashMap<u64, u64>,
+    appearances: FxHashMap<CacheKey, SharedAppearance>,
+    fingerprints: FxHashMap<u64, u64>,
 }
 
 pub type SharedAppearance = Arc<AppearanceDelta>;
@@ -342,7 +344,7 @@ impl Contributions {
 
 #[derive(Debug)]
 struct Preview {
-    values: HashMap<u64, AppearanceDelta>,
+    values: FxHashMap<u64, AppearanceDelta>,
     is_cacheable: bool,
     position_sensitive: bool,
 }
@@ -358,29 +360,29 @@ pub struct Bake {
     pub succeeded: usize,
     pub cache_hits: usize,
     pub limits: Limits,
-    atoms: HashMap<u64, Placed>,
-    objects: HashMap<u64, ObjectId>,
-    cells: HashMap<Position, Vec<u64>>,
-    failed: HashSet<u64>,
-    faults: HashMap<u64, Fault>,
-    connection_faults: HashMap<u64, Fault>,
-    areas: HashMap<(TypeId, u64), ObjectId>,
-    area_members: HashMap<ObjectId, HashSet<u64>>,
+    atoms: FxHashMap<u64, Placed>,
+    objects: FxHashMap<u64, ObjectId>,
+    cells: FxHashMap<Position, Vec<u64>>,
+    failed: FxHashSet<u64>,
+    faults: FxHashMap<u64, Fault>,
+    connection_faults: FxHashMap<u64, Fault>,
+    areas: FxHashMap<(TypeId, u64), ObjectId>,
+    area_members: FxHashMap<ObjectId, FxHashSet<u64>>,
     initialized: bool,
     prepared: BitSet<ObjectId>,
-    prepare_faults: HashMap<ObjectId, Fault>,
+    prepare_faults: FxHashMap<ObjectId, Fault>,
     lit: BitSet<ObjectId>,
-    contributions: HashMap<u64, Vec<u64>>,
-    by_target: HashMap<u64, Contributions>,
-    dirty_appearances: HashSet<u64>,
-    connection_endpoints: HashMap<u64, Vec<ConnectionEndpoint>>,
+    contributions: FxHashMap<u64, Vec<u64>>,
+    by_target: FxHashMap<u64, Contributions>,
+    dirty_appearances: FxHashSet<u64>,
+    connection_endpoints: FxHashMap<u64, Vec<ConnectionEndpoint>>,
     connection_index: HashMap<String, ConnectionChannel>,
-    highlights: HashMap<u64, Vec<Highlight>>,
-    highlight_faults: HashMap<u64, Fault>,
-    light_faults: HashMap<u64, Fault>,
-    module_roots: HashMap<u64, ModuleEntry>,
+    highlights: FxHashMap<u64, Vec<Highlight>>,
+    highlight_faults: FxHashMap<u64, Fault>,
+    light_faults: FxHashMap<u64, Fault>,
+    module_roots: FxHashMap<u64, ModuleEntry>,
     ui_fault_target: Option<u64>,
-    type_groups: HashMap<TypeId, u32>,
+    type_groups: FxHashMap<TypeId, u32>,
     profile: ProfileDefinition,
 }
 
@@ -440,7 +442,7 @@ impl PendingBake<'_> {
 
 struct Replacements {
     removed: Vec<u64>,
-    dirty: HashSet<Position>,
+    dirty: FxHashSet<Position>,
     inserted: Vec<u64>,
 }
 
@@ -671,7 +673,9 @@ impl Bake {
                 .runtime
                 .profile
                 .and_then(|profile| self.runtime.heap.object(profile))
-                .map_or(0.0, |profile| object_number(profile, tree, "light_corner_step", 0.0));
+                .map_or(0.0, |profile| {
+                    NAMES.with(|names| object_number(profile, tree, &names.light_corner_step, 0.0))
+                });
             self.lighting = Some(LightingMap::build(self.runtime.world.size, corner_step, atoms));
         }
 
@@ -754,7 +758,7 @@ impl Bake {
         }
         edges.sort_unstable();
         edges.dedup();
-        let mut adjacency = HashMap::<u64, Vec<u64>>::new();
+        let mut adjacency = FxHashMap::<u64, Vec<u64>>::default();
         for &(source, target) in &edges {
             adjacency.entry(source).or_default().push(target);
             adjacency.entry(target).or_default().push(source);
@@ -1079,25 +1083,30 @@ impl Bake {
     }
 
     fn harvest_light(&self, tree: &ObjectTree, id: u64) -> Option<LightingAtom> {
+        NAMES.with(|names| self.harvest_light_with(names, tree, id))
+    }
+
+    fn harvest_light_with(&self, names: &Names, tree: &ObjectTree, id: u64) -> Option<LightingAtom> {
+        let builtins = tree.builtins();
         let position = self.atoms.get(&id)?.position;
         let object = self.object(id).and_then(|id| self.runtime.heap.object(id))?;
 
-        let range = object_number(object, tree, "demir_light_range", 0.0).max(0.0);
-        let power = object_number(object, tree, "demir_light_power", 0.0);
-        let quadratic = finite_or(object_number(object, tree, "demir_light_quadratic", 0.0), 0.0);
+        let range = object_number(object, tree, &names.light_range, 0.0).max(0.0);
+        let power = object_number(object, tree, &names.light_power, 0.0);
+        let quadratic = finite_or(object_number(object, tree, &names.light_quadratic, 0.0), 0.0);
         let source = (range.is_finite() && power.is_finite() && power != 0.0 && (range > 0.0 || quadratic != 0.0))
             .then(|| {
-                let inner_range = object_number(object, tree, "demir_light_inner_range", 0.0).clamp(0.0, range);
-                let angle = object_number(object, tree, "demir_light_angle", 360.0).clamp(0.0, 360.0);
+                let inner_range = object_number(object, tree, &names.light_inner_range, 0.0).clamp(0.0, range);
+                let angle = object_number(object, tree, &names.light_angle, 360.0).clamp(0.0, 360.0);
                 let icon_size = world_icon_size(tree);
-                let offset_x = object_number(object, tree, vars::PIXEL_X, 0.0)
-                    + object_number(object, tree, vars::PIXEL_W, 0.0)
-                    + object_number(object, tree, vars::STEP_X, 0.0);
-                let offset_y = object_number(object, tree, vars::PIXEL_Y, 0.0)
-                    + object_number(object, tree, vars::PIXEL_Z, 0.0)
-                    + object_number(object, tree, vars::STEP_Y, 0.0);
-                let light_offset_x = finite_or(object_number(object, tree, "demir_light_offset_x", 0.0), 0.0);
-                let light_offset_y = finite_or(object_number(object, tree, "demir_light_offset_y", 0.0), 0.0);
+                let offset_x = object_number(object, tree, &builtins.pixel_x, 0.0)
+                    + object_number(object, tree, &builtins.pixel_w, 0.0)
+                    + object_number(object, tree, &builtins.step_x, 0.0);
+                let offset_y = object_number(object, tree, &builtins.pixel_y, 0.0)
+                    + object_number(object, tree, &builtins.pixel_z, 0.0)
+                    + object_number(object, tree, &builtins.step_y, 0.0);
+                let light_offset_x = finite_or(object_number(object, tree, &names.light_offset_x, 0.0), 0.0);
+                let light_offset_y = finite_or(object_number(object, tree, &names.light_offset_y, 0.0), 0.0);
                 LightSource {
                     origin: [
                         position.x as f32 - 0.5 + offset_x / icon_size + light_offset_x,
@@ -1107,34 +1116,34 @@ impl Bake {
                     range,
                     inner_range: finite_or(inner_range, 0.0),
                     power,
-                    color: object_color(object, tree, "demir_light_color"),
+                    color: object_color(object, tree, &names.light_color),
                     angle: finite_or(angle, 360.0),
-                    direction: direction_angle(object_number(object, tree, "demir_light_dir", 0.0)),
-                    height: finite_or(object_number(object, tree, "demir_light_height", 1.0), 1.0),
-                    curve: finite_or(object_number(object, tree, "demir_light_curve", 1.0), 1.0).max(f32::EPSILON),
-                    peak: object_truthy(object, tree, "demir_light_peak", false),
-                    edge_only: object_truthy(object, tree, "demir_light_edge_only", false),
+                    direction: direction_angle(object_number(object, tree, &names.light_dir, 0.0)),
+                    height: finite_or(object_number(object, tree, &names.light_height, 1.0), 1.0),
+                    curve: finite_or(object_number(object, tree, &names.light_curve, 1.0), 1.0).max(f32::EPSILON),
+                    peak: object_truthy(object, tree, &names.light_peak, false),
+                    edge_only: object_truthy(object, tree, &names.light_edge_only, false),
                     quadratic,
-                    constant: finite_or(object_number(object, tree, "demir_light_constant", 0.0), 0.0),
+                    constant: finite_or(object_number(object, tree, &names.light_constant, 0.0), 0.0),
                 }
             });
 
-        let blocks_value = object_number(object, tree, "demir_blocks_light", -1.0);
+        let blocks_value = object_number(object, tree, &names.blocks_light, -1.0);
         let blocks = if blocks_value == -1.0 {
-            object_truthy(object, tree, vars::OPACITY, false)
+            object_truthy(object, tree, &builtins.opacity, false)
         } else {
             blocks_value != 0.0
         };
 
-        let ambient_power = finite_or(object_number(object, tree, "demir_ambient_power", 0.0), 0.0);
-        let ambient = object_color(object, tree, "demir_ambient_color").map(|channel| channel * ambient_power);
+        let ambient_power = finite_or(object_number(object, tree, &names.ambient_power, 0.0), 0.0);
+        let ambient = object_color(object, tree, &names.ambient_color).map(|channel| channel * ambient_power);
         let light = LightingAtom {
             position,
             source,
             blocks,
-            transparent: object_truthy(object, tree, "demir_z_transparent", false),
+            transparent: object_truthy(object, tree, &names.z_transparent, false),
             ambient,
-            fullbright: object_truthy(object, tree, "demir_fullbright", false),
+            fullbright: object_truthy(object, tree, &names.fullbright, false),
         };
 
         light.affects_lighting().then_some(light)
@@ -1293,20 +1302,21 @@ impl Bake {
         self.diagnostics.record(fault);
     }
 
+    /// SipHash rather than Fx, because the appearance cache trusts this value without comparing vars
     fn fingerprint(&self, id: u64) -> Option<u64> {
         let atom = self.atoms.get(&id)?;
         let object = self.object(id).and_then(|id| self.runtime.heap.object(id))?;
 
-        let mut vars = object
-            .vars
-            .iter()
-            .map(|(name, value)| (name, value.hash_key()))
-            .collect::<Vec<_>>();
-        vars.sort_unstable();
+        let mut vars = object.vars.iter().collect::<Vec<_>>();
+        vars.sort_unstable_by_key(|(name, _)| *name);
 
         let mut hasher = DefaultHasher::new();
         atom.constants.hash(&mut hasher);
-        vars.hash(&mut hasher);
+        vars.len().hash(&mut hasher);
+        for (name, value) in vars {
+            name.hash(&mut hasher);
+            value.hash_into(&mut hasher);
+        }
 
         Some(hasher.finish())
     }
@@ -1348,7 +1358,7 @@ impl Bake {
         })
     }
 
-    fn install_contribution(&mut self, id: u64, mut values: HashMap<u64, SharedAppearance>) {
+    fn install_contribution(&mut self, id: u64, mut values: FxHashMap<u64, SharedAppearance>) {
         let shared = values
             .iter()
             .filter(|(target, _)| **target != id)
@@ -1408,7 +1418,7 @@ impl Bake {
         if let Some(appearance) = cached {
             self.cache_hits += 1;
             self.succeeded += 1;
-            self.install_contribution(id, HashMap::from([(id, appearance)]));
+            self.install_contribution(id, FxHashMap::from_iter([(id, appearance)]));
 
             return;
         }
@@ -1420,7 +1430,7 @@ impl Bake {
                     .values
                     .into_iter()
                     .map(|(target, appearance)| (target, shared(appearance)))
-                    .collect::<HashMap<_, _>>();
+                    .collect::<FxHashMap<_, _>>();
                 if preview.is_cacheable
                     && values.len() == 1
                     && let Some(appearance) = values.get(&id)
@@ -1523,7 +1533,7 @@ impl Bake {
         let mut replacements = replacements_by_id.into_values().collect::<Vec<_>>();
         replacements.sort_by_key(|atom| atom.instance);
 
-        let mut dirty = HashSet::new();
+        let mut dirty = FxHashSet::default();
         let mut inserted = Vec::new();
         let mut remove = removed
             .iter()
@@ -1670,7 +1680,7 @@ impl Bake {
 
         self.rebuild_connection_index();
 
-        let mut affected = HashSet::new();
+        let mut affected = FxHashSet::default();
         for position in dirty {
             for dz in -1..=1 {
                 for dx in -1..=1 {
@@ -1832,20 +1842,19 @@ fn world_icon_size(tree: &ObjectTree) -> f32 {
     let size = tree
         .roots()
         .world
-        .and_then(|world| tree.var_inherited(world, &Identifier::from("icon_size")))
+        .and_then(|world| tree.var_inherited(world, &tree.builtins().icon_size))
         .and_then(|variable| variable.value.as_num())
         .unwrap_or(32.0);
     if size.is_finite() && size > 0.0 { size } else { 32.0 }
 }
 
-fn object_number(object: &Object, tree: &ObjectTree, name: &str, default: f32) -> f32 {
-    let name = Identifier::from(name);
+fn object_number(object: &Object, tree: &ObjectTree, name: &Identifier, default: f32) -> f32 {
     object
         .vars
-        .get(&name)
+        .get(name)
         .and_then(GenericValue::num)
         .or_else(|| {
-            tree.var_inherited(object.ty, &name)
+            tree.var_inherited(object.ty, name)
                 .and_then(|variable| match variable.value {
                     Value::Null => Some(0.0),
                     Value::Num(value) => Some(value),
@@ -1855,23 +1864,21 @@ fn object_number(object: &Object, tree: &ObjectTree, name: &str, default: f32) -
         .unwrap_or(default)
 }
 
-fn object_truthy(object: &Object, tree: &ObjectTree, name: &str, default: bool) -> bool {
-    let name = Identifier::from(name);
+fn object_truthy(object: &Object, tree: &ObjectTree, name: &Identifier, default: bool) -> bool {
     object
         .vars
-        .get(&name)
+        .get(name)
         .map(GenericValue::truthy)
         .or_else(|| {
-            tree.var_inherited(object.ty, &name)
+            tree.var_inherited(object.ty, name)
                 .map(|variable| variable.value.is_truthy())
         })
         .unwrap_or(default)
 }
 
-fn object_color(object: &Object, tree: &ObjectTree, name: &str) -> [f32; 3] {
-    let name = Identifier::from(name);
-    let text = object.vars.get(&name).and_then(GenericValue::text).or_else(|| {
-        tree.var_inherited(object.ty, &name)
+fn object_color(object: &Object, tree: &ObjectTree, name: &Identifier) -> [f32; 3] {
+    let text = object.vars.get(name).and_then(GenericValue::text).or_else(|| {
+        tree.var_inherited(object.ty, name)
             .and_then(|variable| variable.value.as_text())
     });
     parse_color(text)
@@ -2347,14 +2354,14 @@ impl Runtime {
 
     fn placements(
         &mut self, tree: &ObjectTree, module: &Module, task: ProcId, roots: &[ObjectId], limits: Limits,
-    ) -> Result<HashMap<ObjectId, Placement>, Fault> {
+    ) -> Result<FxHashMap<ObjectId, Placement>, Fault> {
         self.ensure_global().map_err(|fault| fault.entering(module, task))?;
 
         let profile = self.profile;
         self.begin_journal();
         self.placement = PlacementState::Task {
             roots: roots.iter().copied().collect(),
-            entries: HashMap::new(),
+            entries: FxHashMap::default(),
         };
 
         let result = (|| {
@@ -2376,7 +2383,7 @@ impl Runtime {
         result?;
         match state {
             PlacementState::Task { entries, .. } => Ok(entries),
-            PlacementState::Idle => Ok(HashMap::new()),
+            PlacementState::Idle => Ok(FxHashMap::default()),
         }
     }
 
@@ -2387,16 +2394,15 @@ impl Runtime {
 
         let profile = self.profile;
         self.begin_journal();
-        let (overlays, underlays, icon, icon_state, transform, host_reads) = NAMES.with(|names| {
-            (
-                names.overlays.clone(),
-                names.underlays.clone(),
-                names.icon.clone(),
-                names.icon_state.clone(),
-                names.transform.clone(),
-                names.host_reads.clone(),
-            )
-        });
+        let builtins = tree.builtins();
+        let (overlays, underlays, icon, icon_state, transform) = (
+            builtins.overlays.clone(),
+            builtins.underlays.clone(),
+            builtins.icon.clone(),
+            builtins.icon_state.clone(),
+            builtins.transform.clone(),
+        );
+        let host_reads = NAMES.with(|names| names.host_reads.clone());
         let result = (|| {
             let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
             evaluator.call(proc, profile, vec![(None, GenericValue::Object(object))])?;
@@ -2416,7 +2422,7 @@ impl Runtime {
             ids.sort_by_key(|id| id.0);
             ids.dedup();
 
-            let mut values = HashMap::new();
+            let mut values = FxHashMap::default();
             let mut export_budget = limits.allocations.min(evaluator.instruction_budget_remaining as usize);
             for id in ids {
                 if let Some(instance) = if id == object {
@@ -2517,34 +2523,58 @@ thread_local! {
             .filter(|name| **name != vars::TRANSFORM)
             .map(|name| Identifier::from(*name))
             .collect(),
-        overlays: Identifier::from(vars::OVERLAYS),
-        underlays: Identifier::from(vars::UNDERLAYS),
-        icon: Identifier::from(vars::ICON),
-        icon_state: Identifier::from(vars::ICON_STATE),
-        transform: Identifier::from(vars::TRANSFORM),
-        dir: Identifier::from(vars::DIR),
-        layer: Identifier::from(vars::LAYER),
-        plane: Identifier::from(vars::PLANE),
         emissive: Identifier::from("demir_emissive"),
         emissive_blocker: Identifier::from("demir_emissive_blocker"),
         overlay_light: Identifier::from("demir_overlay_light"),
+        ambient_color: Identifier::from("demir_ambient_color"),
+        ambient_power: Identifier::from("demir_ambient_power"),
+        blocks_light: Identifier::from("demir_blocks_light"),
+        fullbright: Identifier::from("demir_fullbright"),
+        light_angle: Identifier::from("demir_light_angle"),
+        light_color: Identifier::from("demir_light_color"),
+        light_constant: Identifier::from("demir_light_constant"),
+        light_curve: Identifier::from("demir_light_curve"),
+        light_dir: Identifier::from("demir_light_dir"),
+        light_edge_only: Identifier::from("demir_light_edge_only"),
+        light_height: Identifier::from("demir_light_height"),
+        light_inner_range: Identifier::from("demir_light_inner_range"),
+        light_offset_x: Identifier::from("demir_light_offset_x"),
+        light_offset_y: Identifier::from("demir_light_offset_y"),
+        light_peak: Identifier::from("demir_light_peak"),
+        light_power: Identifier::from("demir_light_power"),
+        light_quadratic: Identifier::from("demir_light_quadratic"),
+        light_range: Identifier::from("demir_light_range"),
+        z_transparent: Identifier::from("demir_z_transparent"),
+        light_corner_step: Identifier::from("light_corner_step"),
     };
 }
 
 struct Names {
     host_reads: Vec<Identifier>,
     appearance: Vec<Identifier>,
-    overlays: Identifier,
-    underlays: Identifier,
-    icon: Identifier,
-    icon_state: Identifier,
-    transform: Identifier,
-    dir: Identifier,
-    layer: Identifier,
-    plane: Identifier,
     emissive: Identifier,
     emissive_blocker: Identifier,
     overlay_light: Identifier,
+    ambient_color: Identifier,
+    ambient_power: Identifier,
+    blocks_light: Identifier,
+    fullbright: Identifier,
+    light_angle: Identifier,
+    light_color: Identifier,
+    light_constant: Identifier,
+    light_curve: Identifier,
+    light_dir: Identifier,
+    light_edge_only: Identifier,
+    light_height: Identifier,
+    light_inner_range: Identifier,
+    light_offset_x: Identifier,
+    light_offset_y: Identifier,
+    light_peak: Identifier,
+    light_power: Identifier,
+    light_quadratic: Identifier,
+    light_range: Identifier,
+    z_transparent: Identifier,
+    light_corner_step: Identifier,
 }
 
 pub fn host_reads() -> Vec<Identifier> {
@@ -2581,16 +2611,17 @@ fn export_appearance(
 fn export_with_names(
     names: &Names, heap: &crate::heap::Heap, tree: &ObjectTree, id: ObjectId, depth: usize, budget: &mut usize,
 ) -> Result<AppearanceDelta, FaultKind> {
+    let builtins = tree.builtins();
     *budget = budget.checked_sub(1).ok_or(FaultKind::Memory)?;
     if depth >= 32 {
         return Err(FaultKind::Memory);
     }
 
     let object = heap.object(id).ok_or(FaultKind::InvalidReference)?;
-    let overlay_light = object_number(object, tree, names.overlay_light.as_str(), 0.0);
-    let lighting = if object_truthy(object, tree, names.emissive_blocker.as_str(), false) {
+    let overlay_light = object_number(object, tree, &names.overlay_light, 0.0);
+    let lighting = if object_truthy(object, tree, &names.emissive_blocker, false) {
         AppearanceLighting::Blocker
-    } else if object_truthy(object, tree, names.emissive.as_str(), false) {
+    } else if object_truthy(object, tree, &names.emissive, false) {
         AppearanceLighting::Emissive
     } else if overlay_light > 0.0 {
         AppearanceLighting::OverlayLight
@@ -2603,15 +2634,15 @@ fn export_with_names(
         lighting,
         ..Default::default()
     };
-    let source = match object.vars.get(&names.icon) {
-        Some(GenericValue::Object(icon)) => Some(heap.icon_source(*icon)),
+    let source = match object.vars.get(&builtins.icon) {
+        Some(GenericValue::Object(icon)) => Some(heap.icon_source(*icon, builtins)),
         _ => None,
     };
     for name in &names.appearance {
         let runtime_value = match &source {
-            Some(source) if *name == names.icon => source.file,
-            Some(source) if *name == names.icon_state && source.icon_state.is_some() => source.icon_state,
-            Some(source) if *name == names.dir && source.dir.is_some() => source.dir,
+            Some(source) if *name == builtins.icon => source.file,
+            Some(source) if *name == builtins.icon_state && source.icon_state.is_some() => source.icon_state,
+            Some(source) if *name == builtins.dir && source.dir.is_some() => source.dir,
             _ => object.vars.get(name),
         };
         let value = if name.as_str() == vars::COLOR && matches!(runtime_value, Some(GenericValue::List(_))) {
@@ -2632,7 +2663,7 @@ fn export_with_names(
     // Compat views can't evaluate `matrix()`, so a transform travels even when the bake left it alone.
     if let Some(matrix) = object
         .vars
-        .get(&names.transform)
+        .get(&builtins.transform)
         .and_then(|value| matrix::read(heap, tree, value))
         .filter(|matrix| !matrix.is_identity())
     {
@@ -2643,10 +2674,10 @@ fn export_with_names(
         });
         appearance
             .vars
-            .push((names.transform.clone(), Value::List(components.into())));
+            .push((builtins.transform.clone(), Value::List(components.into())));
     }
 
-    for name in [&names.overlays, &names.underlays] {
+    for name in [&builtins.overlays, &builtins.underlays] {
         let mut values = Vec::new();
         if let Some(GenericValue::List(list)) = object.vars.get(name)
             && let Some(list) = heap.list(*list)
@@ -2662,10 +2693,10 @@ fn export_with_names(
                             .ok_or(FaultKind::Memory)?;
                         values.push(AppearanceDelta {
                             vars: vec![
-                                (names.icon_state.clone(), Value::Text(state.to_string())),
-                                (names.dir.clone(), Value::Num(0.0)),
-                                (names.layer.clone(), Value::Num(-1.0)),
-                                (names.plane.clone(), Value::Num(-32767.0)),
+                                (builtins.icon_state.clone(), Value::Text(state.to_string())),
+                                (builtins.dir.clone(), Value::Num(0.0)),
+                                (builtins.layer.clone(), Value::Num(-1.0)),
+                                (builtins.plane.clone(), Value::Num(-32767.0)),
                             ],
                             ..Default::default()
                         });
@@ -2675,7 +2706,7 @@ fn export_with_names(
                 }
             }
         }
-        if name == &names.overlays {
+        if name == &builtins.overlays {
             appearance.overlays = values;
         } else {
             appearance.underlays = values;

@@ -7,9 +7,11 @@ use base::{
 };
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, hash_map::DefaultHasher},
+    collections::{HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use codegen::{
     CodeOffset, CompiledFunction, ConstantId, FunctionId, Module, PathId, RegisterId, StringId,
@@ -35,14 +37,14 @@ pub struct Runtime {
     pub world: World,
     pub icons: crate::IconStates,
     pub(crate) ui: crate::ui::Panel,
-    pub(crate) groups: std::collections::HashMap<TypeId, u32>,
+    pub(crate) groups: FxHashMap<TypeId, u32>,
     pub(crate) node_groups: Vec<crate::bake::NodeGroup>,
     pub(crate) rotations: Vec<crate::bake::Rotation>,
     pub(crate) defining_groups: bool,
     output: Vec<String>,
     pub(crate) modular_roots: Vec<TypeId>,
     pub(crate) placement: crate::bake::PlacementState,
-    pub(crate) coordinate_modules: HashMap<Position, Placement>,
+    pub(crate) coordinate_modules: FxHashMap<Position, Placement>,
     pub(crate) pending_placements: crate::bake::PendingPlacements,
     pub(crate) global: Option<ObjectId>,
     pub(crate) world_object: Option<ObjectId>,
@@ -310,11 +312,11 @@ pub(crate) struct Evaluator<'a> {
     pub is_cacheable: bool, // memoization
     pub position_sensitive: bool,
     pub origin: Option<ObjectId>,
-    pub appearance_reads: HashSet<ObjectId>,
+    pub appearance_reads: FxHashSet<ObjectId>,
     pub rng: u64,
     thrown: Option<GenericValue>,
     iterators: Vec<IteratorState>,
-    vars_lists: HashMap<ObjectId, ListId>,
+    vars_lists: FxHashMap<ObjectId, ListId>,
 }
 
 struct CallFrameGuard<'e, 'a> {
@@ -375,6 +377,26 @@ impl Drop for CallFrameGuard<'_, '_> {
     }
 }
 
+/// hashes exactly what `Option<String>` of the path's `Display` would, without formatting it
+pub(crate) fn hash_type_path(path: Option<&TreePath>, hasher: &mut impl Hasher) {
+    let Some(path) = path else {
+        None::<()>.hash(hasher);
+        return;
+    };
+
+    Some(()).hash(hasher);
+    if path.segments.is_empty() {
+        hasher.write(b"/");
+    }
+
+    for segment in &path.segments {
+        hasher.write(b"/");
+        hasher.write(segment.as_str().as_bytes());
+    }
+
+    hasher.write_u8(0xff);
+}
+
 impl<'a> Evaluator<'a> {
     pub(crate) fn new(
         runtime: &'a mut Runtime, tree: &'a ObjectTree, module: &'a Module, limits: Limits, src: Option<ObjectId>,
@@ -383,9 +405,7 @@ impl<'a> Evaluator<'a> {
         if let Some(id) = src
             && let Some(object) = runtime.heap.object(id)
         {
-            tree.get(object.ty)
-                .map(|declaration| declaration.path.to_string())
-                .hash(&mut seed);
+            hash_type_path(tree.get(object.ty).map(|declaration| &declaration.path), &mut seed);
             runtime.world.position(&runtime.heap, id).hash(&mut seed);
         }
 
@@ -403,11 +423,11 @@ impl<'a> Evaluator<'a> {
             is_cacheable: true,
             position_sensitive: false,
             origin: src,
-            appearance_reads: HashSet::new(),
+            appearance_reads: FxHashSet::default(),
             rng: seed.finish().max(1),
             thrown: None,
             iterators: Vec::new(),
-            vars_lists: HashMap::new(),
+            vars_lists: FxHashMap::default(),
         }
     }
 
@@ -1792,7 +1812,8 @@ impl Evaluator<'_> {
         let ty = object.ty;
 
         let mut names = object.vars.keys().cloned().collect::<HashSet<_>>();
-        names.extend([vars::TYPE, vars::PARENT_TYPE, vars::VARS, vars::TAG].map(Identifier::from));
+        let builtins = self.tree.builtins();
+        names.extend([&builtins.r#type, &builtins.parent_type, &builtins.vars, &builtins.tag].map(Clone::clone));
         // instance vars only: no globals, which live on the root, and no static vars
         for declaration in self
             .tree
@@ -2724,7 +2745,7 @@ impl Evaluator<'_> {
     pub(crate) fn throw(&mut self, value: GenericValue) -> Fault {
         let name = match &value {
             GenericValue::Object(_) => self
-                .read_field(value.clone(), &Identifier::from("name"))
+                .read_field(value.clone(), &self.tree.builtins().name)
                 .ok()
                 .and_then(|name| name.text().map(ToOwned::to_owned)),
             _ => None,
@@ -2740,7 +2761,7 @@ impl Evaluator<'_> {
             .new_object(GenericValue::Path(Box::new(TreePath::parse("/exception"))), Vec::new())
             .and_then(|exception| {
                 let name = self.text(message.clone())?;
-                self.write_field(exception.clone(), Identifier::from("name"), name)?;
+                self.write_field(exception.clone(), self.tree.builtins().name.clone(), name)?;
 
                 Ok(exception)
             });

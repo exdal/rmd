@@ -123,12 +123,12 @@ pub(super) fn inspector_snapshot(session: &Session) -> Option<InspectorSnapshot>
 
     let variables = inspector_variables(tree, prefab, &special);
     let icon = properties
-        .get(&Identifier::from(vars::ICON))
+        .get(&session.builtins.icon)
         .and_then(|property| property.value.as_text())
         .unwrap_or_default()
         .to_string();
     let icon_state = properties
-        .get(&Identifier::from(vars::ICON_STATE))
+        .get(&session.builtins.icon_state)
         .and_then(|property| property.value.as_text())
         .unwrap_or_default()
         .to_string();

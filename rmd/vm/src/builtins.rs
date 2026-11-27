@@ -78,7 +78,7 @@ impl Evaluator<'_> {
             };
 
             if key.as_str() == vars::ICON && matches!(value, GenericValue::Object(_)) && !self.is_icon_datum(&value) {
-                self.write_field(GenericValue::Object(id), vars::APPEARANCE.into(), value)?;
+                self.write_field(GenericValue::Object(id), self.tree.builtins().appearance.clone(), value)?;
             } else {
                 self.write_field(GenericValue::Object(id), key, value)?;
             }

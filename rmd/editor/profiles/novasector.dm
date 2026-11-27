@@ -345,7 +345,7 @@
 			blind += list(list(T.x - origin.x, T.y - origin.y))
 
 	var/datum/demir/novasector/profile = demir_profile()
-	var/when = DEMIR_HIGHLIGHT_SELECTED | DEMIR_HIGHLIGHT_HOVERED
+	var/when = DEMIR_HIGHLIGHT_SELECTED
 	// Only seen tiles stay on, or the blind tiles of nearby cameras would cover them.
 	var/seen_when = profile.show_camera_ranges ? when | DEMIR_HIGHLIGHT_ALWAYS : when
 	return list(

@@ -1,12 +1,7 @@
-use base::{
-    coord::Coord,
-    path::TreePath,
-    types::{Identifier, encode_text_macros},
-    vars,
-};
+use base::{coord::Coord, path::TreePath, types::encode_text_macros};
 
 use dear_imgui_rs::{Key, MouseButton, PopupToken, Ui, WindowHoveredFlags};
-use objtree::ObjectTree;
+use objtree::{Builtins, ObjectTree};
 use prefab::{Prefab, PrefabInstanceId};
 
 use super::edit::EditCommand;
@@ -386,7 +381,7 @@ fn draw_atom_menus(
         .filter(|instance| instance.location.coord == coord)
         .fold((0.0_f32, 0.0_f32), |(name_width, path_width), instance| {
             let prefab = instance.prefab();
-            let name = display_name(session.tree(), prefab);
+            let name = display_name(session.tree(), &session.builtins, prefab);
             (
                 name_width.max(ui.calc_text_size(&name)[0]),
                 path_width.max(ui.calc_text_size(format!("[{}]", prefab.path))[0]),
@@ -414,7 +409,7 @@ fn draw_atom_menus(
         }
 
         let prefab = placed.prefab().clone();
-        let name = display_name(session.tree(), &prefab);
+        let name = display_name(session.tree(), &session.builtins, &prefab);
         let path_text = format!("[{}]", prefab.path);
         let label = format!("##atom-{}", instance.get());
         let thumbnail = session.prefab_thumbnail(&prefab);
@@ -502,14 +497,14 @@ fn draw_atom_menus(
     action
 }
 
-pub(crate) fn display_name(tree: Option<&ObjectTree>, prefab: &Prefab) -> String {
-    let name = Identifier::from(vars::NAME);
+pub(crate) fn display_name(tree: Option<&ObjectTree>, builtins: &Builtins, prefab: &Prefab) -> String {
+    let name = &builtins.name;
     prefab
-        .var(&name)
+        .var(name)
         .or_else(|| {
             tree.and_then(|tree| {
                 tree.id_of(&prefab.path)
-                    .and_then(|id| tree.var_inherited(id, &name))
+                    .and_then(|id| tree.var_inherited(id, name))
                     .map(|var| &var.value)
             })
         })

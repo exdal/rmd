@@ -1,4 +1,5 @@
-use std::{collections::HashMap, ops::Range};
+use rustc_hash::FxHashMap;
+use std::ops::Range;
 
 use crate::world::Position;
 
@@ -27,13 +28,13 @@ impl Default for LightTile {
 pub struct LightingMap {
     pub size: [u32; 3],
     pub tiles: Vec<LightTile>,
-    atoms: HashMap<u64, LightingAtom>,
+    atoms: FxHashMap<u64, LightingAtom>,
     cells: Vec<Cell>,
     points: Vec<[f32; 3]>,
     buckets: Vec<Vec<u64>>,
     transparent: Vec<u32>,
     reach: Vec<i32>,
-    ambient: HashMap<usize, Vec<u64>>,
+    ambient: FxHashMap<usize, Vec<u64>>,
     dirty: Vec<Vec<Rect>>,
     corner_step: f32,
 }
@@ -64,13 +65,13 @@ impl LightingMap {
         Self {
             size,
             tiles: vec![LightTile::default(); tiles],
-            atoms: HashMap::new(),
+            atoms: FxHashMap::default(),
             cells: vec![Cell::default(); tiles],
             points: vec![[0.0; 3]; points],
             buckets: vec![Vec::new(); buckets],
             transparent: vec![0; buckets],
             reach: vec![0; levels],
-            ambient: HashMap::new(),
+            ambient: FxHashMap::default(),
             dirty: vec![Vec::new(); levels],
             corner_step,
         }

@@ -10,7 +10,7 @@ use dmi::{
     IconInfo,
     metadata::{Dir, IconState, Metadata},
 };
-use objtree::ObjectTree;
+use objtree::{Builtins, ObjectTree};
 use prefab::Prefab;
 
 use super::{direction_mutation, directional_types_for};
@@ -122,7 +122,7 @@ fn placement_rotation_replaces_directional_paths_in_one_recent_slot() {
 fn direction_mutations_use_byond_direction_bits() {
     for direction in Dir::ORDER {
         assert_eq!(
-            direction_mutation(direction),
+            direction_mutation(&Builtins::default().dir, direction),
             VarMutation::Set(Identifier::from("dir"), Value::Num(direction.to_bits() as f32))
         );
     }

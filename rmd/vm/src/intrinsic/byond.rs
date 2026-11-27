@@ -1282,8 +1282,9 @@ impl Evaluator<'_> {
             },
         };
 
-        self.write_field(GenericValue::Object(id), vars::NAME.into(), pattern)?;
-        self.write_field(GenericValue::Object(id), "flags".into(), flags)?;
+        let builtins = self.tree.builtins();
+        self.write_field(GenericValue::Object(id), builtins.name.clone(), pattern)?;
+        self.write_field(GenericValue::Object(id), builtins.flags.clone(), flags)?;
 
         Ok(GenericValue::Object(id))
     }
@@ -1563,7 +1564,13 @@ impl Evaluator<'_> {
     /// The file behind an `/icon` datum, or the value itself
     pub(crate) fn icon_file(&self, icon: GenericValue) -> GenericValue {
         match icon {
-            GenericValue::Object(id) => self.runtime.heap.icon_source(id).file.cloned().unwrap_or_default(),
+            GenericValue::Object(id) => self
+                .runtime
+                .heap
+                .icon_source(id, self.tree.builtins())
+                .file
+                .cloned()
+                .unwrap_or_default(),
             value => value,
         }
     }
@@ -1721,6 +1728,8 @@ impl Evaluator<'_> {
 
     fn visible_cells(&mut self, origin: Position, size: (i32, i32)) -> Result<HashSet<(i32, i32)>> {
         let (low_x, low_y) = (origin.x - size.0 / 2, origin.y - size.1 / 2);
+        let tree = self.tree;
+        let opacity = &tree.builtins().opacity;
         let mut grid = ViewGrid::new(size.0, size.1);
         for grid_y in 0..size.1 {
             for grid_x in 0..size.0 {
@@ -1733,10 +1742,7 @@ impl Evaluator<'_> {
                 let mut cell = vec![turf];
                 cell.extend(self.contents_of(turf));
                 for id in cell {
-                    if self
-                        .read_field(GenericValue::Object(id), &Identifier::from(vars::OPACITY))?
-                        .truthy()
-                    {
+                    if self.read_field(GenericValue::Object(id), opacity)?.truthy() {
                         is_opaque = true;
                         break;
                     }
@@ -1794,7 +1800,8 @@ impl Evaluator<'_> {
     pub(crate) fn range_add(
         &mut self, entries: &mut Vec<GenericValue>, areas: &mut HashSet<ObjectId>, id: ObjectId,
     ) -> Result<()> {
-        let invisibility = self.read_field(GenericValue::Object(id), &Identifier::from(vars::INVISIBILITY))?;
+        let tree = self.tree;
+        let invisibility = self.read_field(GenericValue::Object(id), &tree.builtins().invisibility)?;
         if invisibility.num().is_some_and(|value| value >= 101.0) {
             return Ok(());
         }

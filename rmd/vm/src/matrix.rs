@@ -1,5 +1,3 @@
-use base::{path::TreePath, types::Identifier};
-
 use codegen::opcode::Binary;
 use objtree::ObjectTree;
 
@@ -21,8 +19,6 @@ const MATRIX_SCALE: u32 = 6;
 const MATRIX_TRANSLATE: u32 = 7;
 const MATRIX_INTERPOLATE: u32 = 8;
 const MATRIX_MODIFY: u32 = 128;
-
-const FIELDS: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
 
 /// BYOND's `/matrix`: `x' = a*x + b*y + c` and `y' = d*x + e*y + f`, with y pointing north.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -136,18 +132,17 @@ struct Decomposed {
 
 pub(crate) fn read(heap: &Heap, tree: &ObjectTree, value: &GenericValue) -> Option<Matrix> {
     let object = value.object().and_then(|id| heap.object(id))?;
-    let root = tree.id_of(&TreePath::parse("/matrix"))?;
+    let root = tree.roots().matrix?;
     if !tree.is_subtype_of(object.ty, root) {
         return None;
     }
 
     let mut matrix = Matrix::IDENTITY;
-    for (slot, name) in matrix.0.iter_mut().zip(FIELDS) {
-        let name = Identifier::from(name);
-        let value = match object.vars.get(&name) {
+    for (slot, name) in matrix.0.iter_mut().zip(&tree.builtins().matrix) {
+        let value = match object.vars.get(name) {
             Some(value) => value.num(),
             None => tree
-                .var_inherited(object.ty, &name)
+                .var_inherited(object.ty, name)
                 .and_then(|variable| variable.value.as_num()),
         };
         if let Some(value) = value {
@@ -169,7 +164,8 @@ impl Evaluator<'_> {
             None => {
                 let ty = self
                     .tree
-                    .id_of(&TreePath::parse("/matrix"))
+                    .roots()
+                    .matrix
                     .ok_or_else(|| self.fault(FaultKind::MissingVariable("/matrix".into())))?;
                 self.reserve(1)?;
 
@@ -180,8 +176,9 @@ impl Evaluator<'_> {
             },
         };
 
-        for (value, name) in matrix.0.into_iter().zip(FIELDS) {
-            self.write_field(GenericValue::Object(id), name.into(), GenericValue::Num(value))?;
+        let tree = self.tree;
+        for (value, name) in matrix.0.into_iter().zip(&tree.builtins().matrix) {
+            self.write_field(GenericValue::Object(id), name.clone(), GenericValue::Num(value))?;
         }
 
         Ok(GenericValue::Object(id))
