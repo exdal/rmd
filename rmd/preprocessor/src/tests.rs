@@ -535,6 +535,27 @@ fn dms_includes_are_ignored() {
 }
 
 #[test]
+fn only_files_with_pragma_multiple_are_included_again() {
+    let (rendered, errors) = pp_with_errors(&[
+        ("entry.dm", fixture!("programs/pragma-multiple-entry.dm")),
+        ("part.dm", fixture!("programs/pragma-multiple-part.dm")),
+        ("once.dm", fixture!("programs/pragma-multiple-once.dm")),
+    ]);
+
+    assert_eq!(rendered, "repeated\nsingle\nrepeated");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("once.dm\" was already included"), "{errors:?}");
+}
+
+#[test]
+fn a_file_including_itself_stops_at_the_depth_limit() {
+    let (_, errors) = pp_with_errors(&[("self.dm", fixture!("programs/pragma-multiple-self.dm"))]);
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("nested too deeply"), "{errors:?}");
+}
+
+#[test]
 fn a_brace_owns_the_indent_it_opens() {
     let rendered = pp(&[("writer.dm", fixture!("programs/brace-owned-indent.dm"))]);
 

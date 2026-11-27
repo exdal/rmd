@@ -166,6 +166,8 @@ pub struct Preprocessor<'a> {
     resources: Vec<PathBuf>,
     resource_dirs: Vec<PathBuf>,
     included: HashSet<PathBuf>,
+    // files that are allowed to include more than once (pragma multiple)
+    multiple: HashSet<PathBuf>,
     errors: Vec<PreprocessError>,
 
     /// Layout held until a line emits code
@@ -208,6 +210,7 @@ impl<'a> Preprocessor<'a> {
             resources: Vec::new(),
             resource_dirs: Vec::new(),
             included: HashSet::new(),
+            multiple: HashSet::new(),
             errors: Vec::new(),
             carried_layout: Vec::new(),
             line_layout: Vec::new(),

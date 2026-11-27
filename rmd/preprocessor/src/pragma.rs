@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use base::location::Location;
 use lexer::token::Token;
 
@@ -31,24 +33,37 @@ impl<'a> Preprocessor<'a> {
         };
 
         let command = raw.token.word();
-        if matches!(command, Some("push" | "pop")) {
-            if let Some(extra) = arguments.first() {
-                self.diagnose(
-                    Code::BadDirective,
-                    extra.location,
-                    "unexpected argument to #pragma push/pop",
-                );
-            } else if command == Some("push") {
-                self.pragmas.push();
-            } else if !self.pragmas.pop() {
-                self.diagnose(
-                    Code::BadDirective,
-                    raw.location,
-                    "#pragma pop without a matching #pragma push",
-                );
-            }
+        match command {
+            Some("push" | "pop") => {
+                if let Some(extra) = arguments.first() {
+                    self.diagnose(
+                        Code::BadDirective,
+                        extra.location,
+                        "unexpected argument to #pragma push/pop",
+                    );
+                } else if command == Some("push") {
+                    self.pragmas.push();
+                } else if !self.pragmas.pop() {
+                    self.diagnose(
+                        Code::BadDirective,
+                        raw.location,
+                        "#pragma pop without a matching #pragma push",
+                    );
+                }
 
-            return;
+                return;
+            },
+            Some("multiple") => {
+                // same as BYOND, tokens come after directive is noop so we don't do any checks
+                let path = self.sources.path(location.file).map(Path::to_path_buf);
+                if let Some(path) = path {
+                    // also, one source file can define multiple multiples (mm yes) so just insert works
+                    self.multiple.insert(path);
+                }
+
+                return;
+            },
+            _ => {},
         }
 
         let level = match command {

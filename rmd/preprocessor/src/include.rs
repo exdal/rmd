@@ -9,6 +9,9 @@ use lexer::{Lexer, token::Token};
 
 use crate::{IncludeState, Preprocessor, diagnostic::Code};
 
+// I really hope it is enough, if not get some help
+const MAX_INCLUDE_DEPTH: usize = 128;
+
 impl<'a> Preprocessor<'a> {
     pub(super) fn directive_include(&mut self, location: Location) {
         let Some(raw) = self.next_significant() else {
@@ -42,12 +45,26 @@ impl<'a> Preprocessor<'a> {
     pub(super) fn include_file(&mut self, path: &Path, location: Location) {
         let path = normalize(path);
 
-        if self.included.contains(&path) {
+        if self.included.contains(&path) && !self.multiple.contains(&path) {
             self.diagnose(
                 Code::FileAlreadyIncluded,
                 location,
                 format!("file \"{}\" was already included", path.display()),
             );
+
+            return;
+        }
+
+        if self.include_stack.len() >= MAX_INCLUDE_DEPTH {
+            self.diagnose(
+                Code::InvalidInclusion,
+                location,
+                format!(
+                    "#include nested too deeply (limit {MAX_INCLUDE_DEPTH}) at \"{}\"",
+                    path.display()
+                ),
+            );
+
             return;
         }
 
@@ -67,6 +84,7 @@ impl<'a> Preprocessor<'a> {
 
             self.included.insert(path.clone());
             self.resources.push(path);
+
             return;
         }
 
