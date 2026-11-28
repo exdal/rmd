@@ -20,8 +20,5 @@ log.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 raw-window-metal = "1"
 
-[build-dependencies]
-shader-slang = "0.1.0"
-
 [lints]
 workspace = true

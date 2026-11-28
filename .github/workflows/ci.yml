@@ -75,9 +75,69 @@ jobs:
 
           "version=$version" >> $env:GITHUB_OUTPUT
 
+  shaders:
+    name: Compile shaders
+    needs: metadata
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
+          persist-credentials: false
+
+      - name: Cache Slang
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/rmd-slang-*-linux-x86_64
+          key: slang-linux-x86_64-${{ hashFiles('.github/scripts/setup-slang.ps1') }}
+
+      - name: Install Slang
+        shell: pwsh
+        run: ./.github/scripts/setup-slang.ps1 -Platform linux-x86_64
+
+      - name: Compile the shaders
+        run: rmd/render/shaders/compile.sh
+
+      - name: Upload the compiled shaders
+        uses: actions/upload-artifact@v4
+        with:
+          name: spirv
+          path: rmd/render/shaders/spirv
+          if-no-files-found: error
+          retention-days: 1
+
+      # The merge commit of a pull request cannot be pushed, so compile again on the real branch.
+      - name: Check out the branch to update
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          path: target
+
+      - name: Commit changed shaders
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        working-directory: target
+        run: |
+          rmd/render/shaders/compile.sh
+          git add -A -- rmd/render/shaders/spirv
+          if git diff --cached --quiet; then
+            echo 'The committed shaders are up to date.'
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Compile shaders'
+          git push origin "HEAD:$BRANCH"
+
   windows:
     name: Check, test, and build Windows x64
-    needs: metadata
+    needs: [metadata, shaders]
     runs-on: windows-2025
     steps:
       - name: Check out the repository
@@ -86,9 +146,11 @@ jobs:
           ref: ${{ inputs.checkout_ref || github.ref }}
           fetch-depth: 0
 
-      - name: Install the Slang build dependency
-        shell: pwsh
-        run: ./.github/scripts/setup-slang.ps1 -Platform windows-x86_64
+      - name: Download the compiled shaders
+        uses: actions/download-artifact@v5
+        with:
+          name: spirv
+          path: rmd/render/shaders/spirv
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -150,7 +212,7 @@ jobs:
 
   linux:
     name: Test and build Linux x64
-    needs: metadata
+    needs: [metadata, shaders]
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the repository
@@ -158,6 +220,12 @@ jobs:
         with:
           ref: ${{ inputs.checkout_ref || github.ref }}
           fetch-depth: 0
+
+      - name: Download the compiled shaders
+        uses: actions/download-artifact@v5
+        with:
+          name: spirv
+          path: rmd/render/shaders/spirv
 
       - name: Install Linux build dependencies
         run: |
@@ -174,10 +242,6 @@ jobs:
             libxkbcommon-dev \
             libxrandr-dev \
             pkg-config
-
-      - name: Install the Slang build dependency
-        shell: pwsh
-        run: ./.github/scripts/setup-slang.ps1 -Platform linux-x86_64
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -229,11 +293,10 @@ jobs:
 
   macos:
     name: Check, test, and build macOS arm64
-    needs: metadata
+    needs: [metadata, shaders]
     runs-on: macos-15
     defaults:
       run:
-        # SIP strips DYLD_* from /bin/bash's environment, so the Slang library path only reaches cargo through pwsh.
         shell: pwsh
     steps:
       - name: Check out the repository
@@ -241,8 +304,11 @@ jobs:
         with:
           ref: ${{ inputs.checkout_ref || github.ref }}
 
-      - name: Install the Slang build dependency
-        run: ./.github/scripts/setup-slang.ps1 -Platform macos-aarch64
+      - name: Download the compiled shaders
+        uses: actions/download-artifact@v5
+        with:
+          name: spirv
+          path: rmd/render/shaders/spirv
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
