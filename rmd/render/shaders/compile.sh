@@ -4,8 +4,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 rm -rf spirv && mkdir spirv
 
+capabilities=SPV_KHR_non_semantic_info+SPV_GOOGLE_user_type+spvSparseResidency+spvMinLod+spvFragmentFullyCoveredEXT+spvShaderNonUniformEXT
+
 compile() {
-    slangc "$1" -target spirv -profile glsl_450 -O2 -matrix-layout-row-major -force-glsl-scalar-layout -I . -entry "$2" -o "spirv/$3"
+    slangc "$1" -target spirv -profile glsl_450 -capability "$capabilities" -O2 -matrix-layout-row-major -force-glsl-scalar-layout -I . -entry "$2" -o "spirv/$3"
 }
 
 compile sprite.slang vs_main sprite.vert.spv
