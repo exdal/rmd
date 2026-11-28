@@ -1,14 +1,17 @@
 use base::{
     coord::Coord,
+    location::Location,
     path::TreePath,
     types::{Identifier, Value},
 };
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use dmm::{Map, Size};
+use objtree::ObjectTree;
 use prefab::{Prefab, PrefabInstanceId};
 use render::{FrameUpdate, SpriteInstance};
 
@@ -19,7 +22,7 @@ use crate::git::{
 };
 use crate::{
     document::{DocumentId, MapDocument},
-    environment::{Environment, progress::Progress},
+    environment::{Environment, progress::Progress, worker::LoadedCodebase},
     git::{
         blame::BlameResult,
         diff::DiffSource,
@@ -204,6 +207,23 @@ pub(crate) fn install_blame(session: &mut Session, id: DocumentId, result: Blame
     git.blame = Some(BlameState::new(result, snapshot, cache.map_revision));
     git.show_blame = true;
     git.web = WebLinks::from_remote("https://github.com/example/maps.git");
+}
+
+pub(crate) fn codebase(extra_paths: &[&str]) -> LoadedCodebase {
+    let mut tree = ObjectTree::new();
+    for path in ["/turf/floor", "/obj/known"]
+        .into_iter()
+        .chain(extra_paths.iter().copied())
+    {
+        tree.register(&TreePath::parse(path), Location::default());
+    }
+    LoadedCodebase {
+        environment: Environment::new("test.dme", tree),
+        diagnostics: Default::default(),
+        textures: Default::default(),
+        thumbnails: HashMap::new(),
+        maps: Vec::new(),
+    }
 }
 
 pub(crate) fn examples() -> PathBuf {
@@ -523,6 +543,7 @@ pub(crate) fn assert_render_cache_matches_rebuild(session: &Session) {
             perspective: environment.world.perspective,
             node_types: Some(&session.active_cache().node_types),
             visibility: &session.type_visibility,
+            turf_view: session.active_cache().turf_view.as_ref(),
             tile_size: session.options.tile_size,
             appearances: crate::bake::appearances(session.active_cache().bake.as_ref()),
             lighting: session

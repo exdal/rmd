@@ -98,14 +98,20 @@ impl InspectorState {
         let find_similar = ui.text_link("Find similar...");
         let is_preview = snapshot.picked.get() >= PREVIEW_ID_START;
         let is_stash = session.is_stash_active();
+        let is_outside_focus = session
+            .state
+            .active_document()
+            .is_some_and(|document| !document.is_within_focus(snapshot.location.coord));
         if is_preview {
             ui.text_disabled("Module preview, read only");
         } else if is_stash {
             ui.text_disabled("Stash, read only");
+        } else if is_outside_focus {
+            ui.text_disabled("Outside the focused area, read only");
         }
 
         ui.separator();
-        let _disabled = ui.begin_disabled_with_cond(is_preview || is_stash);
+        let _disabled = ui.begin_disabled_with_cond(is_preview || is_stash || is_outside_focus);
         session.refresh_identical();
         match self.scope {
             EditScope::Selected => {

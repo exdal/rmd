@@ -136,6 +136,8 @@ impl UiState {
         } else if gestures.region_placement.is_some() || gestures.fill_anchor.is_some() {
             gestures.region_placement = None;
             gestures.fill_anchor = None;
+        } else if session.turf_view_origin(frame.id).is_some() {
+            session.clear_turf_view(frame.id);
         } else if matches!(tool, Tool::Select | Tool::Fill) {
             session.select_region(None);
         }
@@ -239,6 +241,9 @@ impl UiState {
                     frame.interaction.cursor = Some(pixel);
                     request_pick(frame.interaction, PickRequest::NodeDelete(coord));
                 },
+            },
+            MenuAction::ViewFromTurf(coord) => {
+                session.toggle_turf_view(id, coord);
             },
             MenuAction::Mirror(transform) => {
                 session.transform_selected_region_with_mode(transform, session.selection_mode());

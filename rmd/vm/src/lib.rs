@@ -24,6 +24,7 @@ pub mod world;
 pub use error::{Fault, FaultKey, FaultKind, StackFrame, proc_name};
 pub use eval::Runtime;
 pub use external::ExternalAccess;
+pub use intrinsic::view_grid::{DEFAULT_VIEW_SIZE, clamp_view_size, view_box, view_span, visible_tiles};
 pub use prelude::Intrinsic;
 pub use value::{AppearanceDelta, AppearanceLighting, GenericValue};
 

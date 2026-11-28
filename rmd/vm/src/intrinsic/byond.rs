@@ -9,7 +9,9 @@ use crate::{
     eval::Evaluator,
     external::{ExternalAccess, ExternalFunction},
     heap::{Object, ObjectId},
-    intrinsic::view_grid::{Sight, ViewGrid, ViewTile, dantom_spiral},
+    intrinsic::view_grid::{
+        DEFAULT_VIEW_SIZE, Sight, clamp_view_size, dantom_spiral, view_box, view_span, visible_tiles,
+    },
     json, lighting,
     matrix::Matrix,
     text::{self, Unit},
@@ -1618,30 +1620,20 @@ impl Evaluator<'_> {
     /// OpenDream's `HandleRange`. The arguments come in either order, and `"7x5"` spells a box.
     fn range_list(&mut self, args: [GenericValue; 2], include_center: bool, sight: Sight) -> Result<GenericValue> {
         let mut center = None;
-        let mut size = (11, 11);
+        let mut size = DEFAULT_VIEW_SIZE;
         for value in args {
             match value {
                 GenericValue::Object(id) => center = Some(id),
-                GenericValue::Num(distance) => {
-                    let span = (distance.max(0.0) as i32).saturating_mul(2).saturating_add(1);
-                    size = (span, span);
-                },
-                GenericValue::Text(text) => {
-                    if let Some((width, height)) = text.split_once('x')
-                        && let (Ok(width), Ok(height)) = (width.trim().parse::<i32>(), height.trim().parse::<i32>())
-                    {
-                        size = (width.max(0), height.max(0));
-                    }
+                GenericValue::Num(distance) => size = view_span(distance),
+                GenericValue::Text(text) if let Some(boxed) = view_box(&text) => {
+                    size = boxed;
                 },
                 _ => {},
             }
         }
 
-        let [world_width, world_height, _] = self.runtime.world.size;
-        let size = (
-            size.0.min(world_width.saturating_mul(2).saturating_add(1)),
-            size.1.min(world_height.saturating_mul(2).saturating_add(1)),
-        );
+        let [width, height, _] = self.runtime.world.size;
+        let size = clamp_view_size(size, (width, height));
         let Some(center) = center else {
             return self.list(Vec::new());
         };
@@ -1727,46 +1719,26 @@ impl Evaluator<'_> {
     }
 
     fn visible_cells(&mut self, origin: Position, size: (i32, i32)) -> Result<HashSet<(i32, i32)>> {
-        let (low_x, low_y) = (origin.x - size.0 / 2, origin.y - size.1 / 2);
         let tree = self.tree;
         let opacity = &tree.builtins().opacity;
-        let mut grid = ViewGrid::new(size.0, size.1);
-        for grid_y in 0..size.1 {
-            for grid_x in 0..size.0 {
-                let position = Position::new(low_x + grid_x, low_y + grid_y, origin.z);
-                let Some(turf) = self.runtime.world.turf_at(position) else {
-                    continue;
-                };
 
-                let mut is_opaque = false;
-                let mut cell = vec![turf];
-                cell.extend(self.contents_of(turf));
-                for id in cell {
-                    if self.read_field(GenericValue::Object(id), opacity)?.truthy() {
-                        is_opaque = true;
-                        break;
-                    }
-                }
+        visible_tiles((origin.x, origin.y), size, |x, y| {
+            let Some(turf) = self.runtime.world.turf_at(Position::new(x, y, origin.z)) else {
+                return Ok(None);
+            };
 
-                grid.tiles[(grid_y * size.0 + grid_x) as usize] = Some(ViewTile {
-                    is_opaque,
-                    vis: 0,
-                    vis2: 0,
-                });
-            }
-        }
-
-        grid.calculate();
-        let mut visible = HashSet::new();
-        for grid_y in 0..size.1 {
-            for grid_x in 0..size.0 {
-                if grid.get(grid_x, grid_y).is_some_and(|tile| tile.vis != 0) {
-                    visible.insert((low_x + grid_x, low_y + grid_y));
+            let mut is_opaque = false;
+            let mut cell = vec![turf];
+            cell.extend(self.contents_of(turf));
+            for id in cell {
+                if self.read_field(GenericValue::Object(id), opacity)?.truthy() {
+                    is_opaque = true;
+                    break;
                 }
             }
-        }
 
-        Ok(visible)
+            Ok(Some(is_opaque))
+        })
     }
 
     fn range_finish(&mut self, entries: Vec<GenericValue>) -> Result<GenericValue> {

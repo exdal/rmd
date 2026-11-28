@@ -4,7 +4,10 @@ use std::{cmp::Reverse, collections::BTreeMap};
 
 use render::{SpriteInstance, SpriteTexture, UpdateRange};
 
-use super::{FIRST_PLACEMENT, FrameInstances, PrefabUpdate, RenderedPrefab, SpriteKey, TypeVisibility};
+use super::{
+    FIRST_PLACEMENT, FrameInstances, PrefabUpdate, RenderedPrefab, SpriteKey, TypeVisibility, is_placement_hidden,
+};
+use crate::focus::TurfView;
 
 const PAGE_CAPACITY: usize = 256;
 /// number of sprites to fill into a page during load, left is spare to make tweaks faster
@@ -207,10 +210,10 @@ impl FrameInstances {
 
 impl FrameInstances {
     /// flags the sprites of every placement whose type changed visibility, without rendering anything again
-    pub fn apply_visibility(&mut self, visibility: &TypeVisibility) -> PrefabUpdate {
+    pub fn apply_visibility(&mut self, visibility: &TypeVisibility, turf_view: Option<&TurfView>) -> PrefabUpdate {
         let mut flipped = BitSet::default();
         for (owner, placement) in &mut self.placements {
-            let hidden = !visibility.is_visible(placement.type_id);
+            let hidden = is_placement_hidden(visibility, turf_view, placement.type_id, placement.coord);
             if placement.hidden != hidden {
                 placement.hidden = hidden;
                 flipped.insert(*owner);

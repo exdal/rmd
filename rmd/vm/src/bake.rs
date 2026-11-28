@@ -6,6 +6,7 @@ use base::{
 use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
+    mem,
     ops::Range,
     path::PathBuf,
     sync::{Arc, OnceLock},
@@ -18,9 +19,11 @@ use objtree::{ObjectTree, TypeId};
 
 use crate::{
     AppearanceDelta, AppearanceLighting, Diagnostics, Fault, FaultKind, GenericValue, IconStates, Limits, Runtime,
-    heap::{Object, ObjectId},
+    eval::Evaluator,
+    heap::{Heap, Object, ObjectId},
     lighting::{LightSource, LightingAtom, direction_angle, parse_color},
     matrix,
+    ui::{Feedback, Frame, Rebake},
     value::ListData,
     world::Position,
 };
@@ -167,7 +170,7 @@ impl PendingPlacements {
     fn take(&mut self) -> Vec<(ObjectId, Placement)> {
         self.mark = 0;
 
-        std::mem::take(&mut self.entries)
+        mem::take(&mut self.entries)
     }
 }
 
@@ -776,6 +779,12 @@ impl Bake {
         edges
     }
 
+    pub fn view_from(
+        &mut self, tree: &ObjectTree, module: &Module, position: Position,
+    ) -> Result<HashSet<[i32; 2]>, Fault> {
+        self.runtime.view_from(tree, module, position, self.limits)
+    }
+
     pub fn highlights(&self, id: u64) -> &[Highlight] {
         self.highlights.get(&id).map_or(&[], Vec::as_slice)
     }
@@ -785,11 +794,10 @@ impl Bake {
     }
 
     pub fn ui(
-        &mut self, tree: &ObjectTree, module: &Module, target: Option<u64>, dockspace: u32,
-        feedback: crate::ui::Feedback,
-    ) -> Result<crate::ui::Frame, Fault> {
+        &mut self, tree: &ObjectTree, module: &Module, target: Option<u64>, dockspace: u32, feedback: Feedback,
+    ) -> Result<Frame, Fault> {
         let Some(proc) = self.profile.procedure(ProfileHook::Ui) else {
-            return Ok(crate::ui::Frame::default());
+            return Ok(Frame::default());
         };
 
         let is_interaction = feedback.interacted;
@@ -1464,7 +1472,7 @@ impl Bake {
 
     fn compose(&mut self) -> Vec<u64> {
         let mut changed = Vec::new();
-        for id in std::mem::take(&mut self.dirty_appearances) {
+        for id in mem::take(&mut self.dirty_appearances) {
             let previous = self.appearances.remove(&id);
             let composed = self.composed(id);
             if composed != previous {
@@ -1753,28 +1761,28 @@ impl Bake {
     /// allocations can see what each part held.
     #[doc(hidden)]
     pub fn release_in_stages(mut self, mut freed: impl FnMut(&'static str)) {
-        drop(std::mem::take(&mut self.appearances));
+        drop(mem::take(&mut self.appearances));
         freed("composed appearances");
-        drop(std::mem::take(&mut self.by_target));
+        drop(mem::take(&mut self.by_target));
         freed("contributions by target");
-        drop(std::mem::take(&mut self.contributions));
+        drop(mem::take(&mut self.contributions));
         freed("contribution lists");
         drop(self.lighting.take());
         freed("lighting map");
-        drop(std::mem::take(&mut self.atoms));
+        drop(mem::take(&mut self.atoms));
         freed("atoms");
-        drop(std::mem::take(&mut self.objects));
-        drop(std::mem::take(&mut self.cells));
+        drop(mem::take(&mut self.objects));
+        drop(mem::take(&mut self.cells));
         freed("object and cell maps");
-        drop(std::mem::take(&mut self.prepared));
-        drop(std::mem::take(&mut self.prepare_faults));
-        drop(std::mem::take(&mut self.lit));
+        drop(mem::take(&mut self.prepared));
+        drop(mem::take(&mut self.prepare_faults));
+        drop(mem::take(&mut self.lit));
         freed("prepared and lit sets");
-        drop(std::mem::take(&mut self.connection_endpoints));
-        drop(std::mem::take(&mut self.connection_index));
-        drop(std::mem::take(&mut self.highlights));
+        drop(mem::take(&mut self.connection_endpoints));
+        drop(mem::take(&mut self.connection_index));
+        drop(mem::take(&mut self.highlights));
         freed("connections and highlights");
-        drop(std::mem::take(&mut self.runtime.heap.lists));
+        drop(mem::take(&mut self.runtime.heap.lists));
         freed("heap lists");
         for object in &mut self.runtime.heap.objects {
             object.vars = Default::default();
@@ -1784,13 +1792,13 @@ impl Bake {
             object.contents = Vec::new();
         }
         freed("heap object contents");
-        drop(std::mem::take(&mut self.runtime.heap.objects));
+        drop(mem::take(&mut self.runtime.heap.objects));
         freed("heap objects");
         drop(self);
         freed("everything else");
     }
 
-    pub fn rebake(&mut self, tree: &ObjectTree, module: &Module, request: crate::ui::Rebake) -> BakeUpdate {
+    pub fn rebake(&mut self, tree: &ObjectTree, module: &Module, request: Rebake) -> BakeUpdate {
         if !self.initialized || request.is_empty() {
             return BakeUpdate::default();
         }
@@ -1901,11 +1909,10 @@ fn field_number(fields: &[(GenericValue, Option<GenericValue>)], name: &str, def
 }
 
 pub(crate) fn placement_entry(
-    evaluator: &mut crate::eval::Evaluator<'_>, value: GenericValue,
+    evaluator: &mut Evaluator<'_>, value: GenericValue,
 ) -> Result<(PlacementTarget, Placement), Fault> {
-    let invalid = |evaluator: &crate::eval::Evaluator<'_>, message: &str| {
-        evaluator.fault(FaultKind::InvalidOperation(message.into()))
-    };
+    let invalid =
+        |evaluator: &Evaluator<'_>, message: &str| evaluator.fault(FaultKind::InvalidOperation(message.into()));
 
     let GenericValue::List(list) = value else {
         return Err(invalid(
@@ -2054,7 +2061,7 @@ pub(crate) fn placement_entry(
     ))
 }
 
-fn coordinate(evaluator: &mut crate::eval::Evaluator<'_>, value: &GenericValue) -> Result<Position, Fault> {
+fn coordinate(evaluator: &mut Evaluator<'_>, value: &GenericValue) -> Result<Position, Fault> {
     let invalid = || {
         evaluator.fault(FaultKind::InvalidOperation(
             "demir_place_modular() at must be list(x, y, z)".into(),
@@ -2086,8 +2093,7 @@ fn coordinate(evaluator: &mut crate::eval::Evaluator<'_>, value: &GenericValue) 
 }
 
 fn highlight_from_fields(
-    evaluator: &mut crate::eval::Evaluator<'_>, fields: &[(GenericValue, Option<GenericValue>)], position: Position,
-    size: [i32; 3],
+    evaluator: &mut Evaluator<'_>, fields: &[(GenericValue, Option<GenericValue>)], position: Position, size: [i32; 3],
 ) -> Result<Option<Highlight>, Fault> {
     let mut offsets = Vec::new();
     if let Some(GenericValue::List(tiles)) = field(fields, "tiles") {
@@ -2199,7 +2205,7 @@ impl Runtime {
         let profile = self.profile;
         self.begin_journal();
         let result = (|| {
-            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
+            let mut evaluator = Evaluator::new(self, tree, module, limits, Some(object));
             let value = evaluator.call(proc, profile, vec![(None, GenericValue::Object(object))])?;
             let entries = match value {
                 GenericValue::Null => return Ok(Vec::new()),
@@ -2257,8 +2263,8 @@ impl Runtime {
     #[allow(clippy::too_many_arguments)]
     fn ui_frame(
         &mut self, tree: &ObjectTree, module: &Module, proc: ProcId, target: Option<ObjectId>, dockspace: u32,
-        feedback: crate::ui::Feedback, limits: Limits,
-    ) -> Result<crate::ui::Frame, Fault> {
+        feedback: Feedback, limits: Limits,
+    ) -> Result<Frame, Fault> {
         self.ensure_global().map_err(|fault| fault.entering(module, proc))?;
 
         let profile = self.profile;
@@ -2267,7 +2273,7 @@ impl Runtime {
         self.begin_journal();
         let result = {
             let argument = target.map_or(GenericValue::Null, GenericValue::Object);
-            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, target);
+            let mut evaluator = Evaluator::new(self, tree, module, limits, target);
             evaluator.call(proc, profile, vec![(None, argument)])
         };
 
@@ -2281,12 +2287,66 @@ impl Runtime {
 
         let (commands, rebake, modular_preview) = self.ui.end_frame();
 
-        result.map(|_| crate::ui::Frame {
+        result.map(|_| Frame {
             commands,
             committed: is_committed,
             rebake: if is_committed { rebake } else { Default::default() },
             modular_preview: modular_preview.filter(|_| is_committed),
         })
+    }
+
+    fn view_from(
+        &mut self, tree: &ObjectTree, module: &Module, position: Position, limits: Limits,
+    ) -> Result<HashSet<[i32; 2]>, Fault> {
+        self.ensure_global()?;
+
+        let Some(turf) = self.world.turf_at(position) else {
+            return Ok(HashSet::new());
+        };
+
+        self.begin_journal();
+        let result = (|| {
+            let mut evaluator = Evaluator::new(self, tree, module, limits, None);
+            let dist = evaluator
+                .read_field(GenericValue::World, &Identifier::from("view"))
+                .unwrap_or_default();
+            let GenericValue::List(list) = evaluator.view([GenericValue::Object(turf), dist], true)? else {
+                return Ok(HashSet::new());
+            };
+
+            let entries = evaluator
+                .runtime
+                .heap
+                .list(list)
+                .map(|list| list.entries.clone())
+                .ok_or_else(|| evaluator.fault(FaultKind::InvalidReference))?;
+            let root = tree.roots().turf;
+            let mut visible = HashSet::new();
+            for (entry, _) in entries {
+                let GenericValue::Object(id) = entry else {
+                    continue;
+                };
+
+                let is_turf = evaluator
+                    .runtime
+                    .heap
+                    .object(id)
+                    .zip(root)
+                    .is_some_and(|(object, root)| tree.is_subtype_of(object.ty, root));
+                if !is_turf {
+                    continue;
+                }
+
+                if let Some(position) = evaluator.runtime.world.position(&evaluator.runtime.heap, id) {
+                    visible.insert([position.x, position.y]);
+                }
+            }
+
+            Ok(visible)
+        })();
+        self.rollback_journal();
+
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2299,7 +2359,7 @@ impl Runtime {
         let profile = self.profile;
         self.begin_journal();
         let result = (|| {
-            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
+            let mut evaluator = Evaluator::new(self, tree, module, limits, Some(object));
             let value = evaluator.call(proc, profile, vec![(None, GenericValue::Object(object))])?;
             let entries = match value {
                 GenericValue::Null => return Ok(Vec::new()),
@@ -2368,13 +2428,9 @@ impl Runtime {
             let entries = roots.iter().map(|root| (GenericValue::Object(*root), None)).collect();
             let list = self.heap.alloc_list(ListData::new(entries)).map_err(Fault::detached)?;
 
-            crate::eval::Evaluator::new(self, tree, module, limits, None).call(
-                task,
-                profile,
-                vec![(None, GenericValue::List(list))],
-            )
+            Evaluator::new(self, tree, module, limits, None).call(task, profile, vec![(None, GenericValue::List(list))])
         })();
-        let state = std::mem::take(&mut self.placement);
+        let state = mem::take(&mut self.placement);
         match &result {
             Ok(_) => self.heap.rollback(),
             Err(_) => self.rollback_journal(),
@@ -2404,7 +2460,7 @@ impl Runtime {
         );
         let host_reads = NAMES.with(|names| names.host_reads.clone());
         let result = (|| {
-            let mut evaluator = crate::eval::Evaluator::new(self, tree, module, limits, Some(object));
+            let mut evaluator = Evaluator::new(self, tree, module, limits, Some(object));
             evaluator.call(proc, profile, vec![(None, GenericValue::Object(object))])?;
 
             let mut ids = evaluator.runtime.heap.changed_objects();
@@ -2603,13 +2659,13 @@ const HOST_READS: &[&str] = &[
 ];
 
 fn export_appearance(
-    heap: &crate::heap::Heap, tree: &ObjectTree, id: ObjectId, depth: usize, budget: &mut usize,
+    heap: &Heap, tree: &ObjectTree, id: ObjectId, depth: usize, budget: &mut usize,
 ) -> Result<AppearanceDelta, FaultKind> {
     NAMES.with(|names| export_with_names(names, heap, tree, id, depth, budget))
 }
 
 fn export_with_names(
-    names: &Names, heap: &crate::heap::Heap, tree: &ObjectTree, id: ObjectId, depth: usize, budget: &mut usize,
+    names: &Names, heap: &Heap, tree: &ObjectTree, id: ObjectId, depth: usize, budget: &mut usize,
 ) -> Result<AppearanceDelta, FaultKind> {
     let builtins = tree.builtins();
     *budget = budget.checked_sub(1).ok_or(FaultKind::Memory)?;
@@ -2725,7 +2781,7 @@ fn hash_constants(vars: &[(Identifier, Value)], hasher: &mut DefaultHasher) {
 }
 
 fn hash_constant(value: &Value, hasher: &mut DefaultHasher) {
-    std::mem::discriminant(value).hash(hasher);
+    mem::discriminant(value).hash(hasher);
     match value {
         Value::Null | Value::Unevaluated => {},
         Value::Num(number) => number.to_bits().hash(hasher),

@@ -4,7 +4,7 @@ use crate::{ExternalAccess, FaultKind, GenericValue, Intrinsic, eval::Evaluator,
 
 mod byond;
 mod demir;
-mod view_grid;
+pub(crate) mod view_grid;
 
 use byond::Result;
 

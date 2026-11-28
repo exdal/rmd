@@ -11,6 +11,7 @@ use crate::{
         worker::{self, Baked, BakedMap, Job},
     },
     document::{DocumentId, MapDocument},
+    focus::turf_view::refresh_turf_view,
     frame::{self, PrefabUpdate, options::FrameRenderOptions},
     maploader::preview::PREVIEW_ID_START,
 };
@@ -416,6 +417,8 @@ impl Session {
         } = self;
         let cache = caches.entry(id).or_default();
         cache.always_highlights = always_highlighted(cache.bake.as_ref());
+        refresh_turf_view(cache, state.environment.as_deref(), state.document(id));
+
         let affected = bake_update.appearances;
         let update = match (state.environment.as_ref(), state.document(id)) {
             (Some(environment), Some(document)) => frame::update_view_prefabs_with_options(
@@ -428,6 +431,7 @@ impl Session {
                     perspective: environment.world.perspective,
                     node_types: Some(&cache.node_types),
                     visibility: type_visibility,
+                    turf_view: cache.turf_view.as_ref(),
                     tile_size: options.tile_size,
                     appearances: crate::bake::appearances(cache.bake.as_ref()),
                     lighting: cache.bake.as_ref().and_then(|bake| bake.lighting.as_ref()),
@@ -457,6 +461,21 @@ impl Session {
         }
 
         self.publish_frame_update(id, update);
+
+        let Self {
+            caches,
+            type_visibility,
+            ..
+        } = self;
+        if let Some(cache) = caches.get_mut(&id)
+            && cache.turf_view.is_some()
+        {
+            let update = cache
+                .instances
+                .apply_visibility(type_visibility, cache.turf_view.as_ref());
+            self.publish_frame_update(id, update);
+        }
+
         self.revalidate_focus();
     }
 

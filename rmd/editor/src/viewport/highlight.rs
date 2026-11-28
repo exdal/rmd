@@ -11,6 +11,7 @@ use crate::{
 };
 
 pub(super) const UNKNOWN_TYPE_COLOR: [f32; 3] = [0.58431375, 0.0, 1.0];
+const TURF_VIEW_COLOR: [f32; 3] = [0.25, 0.75, 0.25];
 
 #[derive(Default)]
 pub(crate) struct UnknownHighlights {
@@ -52,6 +53,19 @@ impl UnknownHighlights {
             })
             .clone()
     }
+}
+
+pub(crate) fn turf_view_marker(origin: Coord) -> SharedHighlights {
+    vec![Highlight {
+        tiles: highlight_tiles(&HashSet::from([[origin.x as i32, origin.y as i32]])),
+        z: origin.z as i32,
+        color: TURF_VIEW_COLOR,
+        fill: 0.0,
+        outline: true,
+        when: HIGHLIGHT_ALWAYS,
+        label: Some("View origin".into()),
+    }]
+    .into()
 }
 
 pub(crate) fn always_highlighted(bake: Option<&Bake>) -> Vec<PrefabInstanceId> {
@@ -160,6 +174,10 @@ impl Session {
             document.z,
         ));
 
+        if let Some(view) = cache.turf_view.as_ref().filter(|view| view.origin.z == document.z) {
+            set.shared.push(view.highlights.clone());
+        }
+
         if let Some(conflicts) = self.with_conflict_view(id, |view, conflicts| view.highlights(conflicts, document.z)) {
             set.shared.push(conflicts);
         }
@@ -170,37 +188,18 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use base::{location::Location, path::TreePath};
+    use base::path::TreePath;
     use std::sync::Arc;
 
     use dmm::{Map, Size};
-    use objtree::ObjectTree;
     use prefab::Prefab;
 
     use super::*;
     use crate::{
         bake::{HIGHLIGHT_EDGE_EAST, HIGHLIGHT_EDGE_WEST},
         document::MapDocument,
-        environment::{Environment, worker::LoadedCodebase},
-        session::fixtures::conflicted_session,
+        session::fixtures::{codebase, conflicted_session},
     };
-
-    fn codebase(extra_paths: &[&str]) -> LoadedCodebase {
-        let mut tree = ObjectTree::new();
-        for path in ["/turf/floor", "/obj/known"]
-            .into_iter()
-            .chain(extra_paths.iter().copied())
-        {
-            tree.register(&TreePath::parse(path), Location::default());
-        }
-        LoadedCodebase {
-            environment: Environment::new("test.dme", tree),
-            diagnostics: Default::default(),
-            textures: Default::default(),
-            thumbnails: HashMap::new(),
-            maps: Vec::new(),
-        }
-    }
 
     fn unknown_session() -> Session {
         let mut session = Session::new();
