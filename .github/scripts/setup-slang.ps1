@@ -34,28 +34,6 @@ $temporaryRoot = if ($env:RUNNER_TEMP) {
 $installRoot = Join-Path $temporaryRoot "rmd-slang-$version-$Platform"
 $archivePath = Join-Path $temporaryRoot $archive.Name
 
-if (Test-Path -LiteralPath $installRoot) {
-    Remove-Item -Recurse -Force -LiteralPath $installRoot
-}
-New-Item -ItemType Directory -Path $installRoot | Out-Null
-
-Write-Host "Downloading Slang $version for $Platform."
-Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath
-
-$actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
-if ($actualHash -ne $archive.Sha256) {
-    throw "Slang archive checksum mismatch: expected $($archive.Sha256), got $actualHash."
-}
-
-if ($archive.Name.EndsWith('.zip', [StringComparison]::Ordinal)) {
-    Expand-Archive -LiteralPath $archivePath -DestinationPath $installRoot
-} else {
-    & tar -xzf $archivePath -C $installRoot
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not extract '$archivePath'."
-    }
-}
-
 $headerPath = Join-Path $installRoot 'include/slang.h'
 $libraryName = switch ($Platform) {
     'windows-x86_64' { 'slang.lib' }
@@ -63,13 +41,46 @@ $libraryName = switch ($Platform) {
     'macos-aarch64' { 'libslang.dylib' }
 }
 $libraryPath = Join-Path $installRoot "lib/$libraryName"
+$binaryName = if ($Platform -eq 'windows-x86_64') { 'slang.dll' } else { 'slangc' }
+$binaryPath = Join-Path $installRoot "bin/$binaryName"
+
+$isInstalled = (Test-Path -LiteralPath $headerPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $libraryPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $binaryPath -PathType Leaf)
+
+if ($isInstalled) {
+    Write-Host "Using the cached Slang $version for $Platform."
+} else {
+    if (Test-Path -LiteralPath $installRoot) {
+        Remove-Item -Recurse -Force -LiteralPath $installRoot
+    }
+    New-Item -ItemType Directory -Path $installRoot | Out-Null
+
+    Write-Host "Downloading Slang $version for $Platform."
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath
+
+    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
+    if ($actualHash -ne $archive.Sha256) {
+        throw "Slang archive checksum mismatch: expected $($archive.Sha256), got $actualHash."
+    }
+
+    if ($archive.Name.EndsWith('.zip', [StringComparison]::Ordinal)) {
+        Expand-Archive -LiteralPath $archivePath -DestinationPath $installRoot
+    } else {
+        & tar -xzf $archivePath -C $installRoot
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not extract '$archivePath'."
+        }
+    }
+
+    Remove-Item -Force -LiteralPath $archivePath
+}
+
 if (-not (Test-Path -LiteralPath $headerPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $libraryPath -PathType Leaf)) {
     throw "The Slang archive did not contain slang.h and $libraryName."
 }
 
-$binaryName = if ($Platform -eq 'windows-x86_64') { 'slang.dll' } else { 'slangc' }
-$binaryPath = Join-Path $installRoot "bin/$binaryName"
 if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
     throw "The Slang archive did not contain $binaryName."
 }
@@ -108,5 +119,4 @@ if ($env:GITHUB_PATH) {
     $binaryDirectory >> $env:GITHUB_PATH
 }
 
-Remove-Item -Force -LiteralPath $archivePath
 Write-Host "Configured Slang from '$installRoot'."

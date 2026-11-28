@@ -22,6 +22,9 @@ jobs:
   ci:
     name: Validate, test, and build
     uses: ./.github/workflows/ci.yml
+    # The reusable CI workflow's shader job asks for contents: write, which a caller must grant.
+    permissions:
+      contents: write
     with:
       expected_tag: ${{ github.event.release.tag_name || inputs.release_tag }}
       checkout_ref: ${{ github.event.release.tag_name || inputs.release_tag }}

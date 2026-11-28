@@ -39,7 +39,7 @@ From a source checkout with the build dependencies installed, you can open both 
 cargo run --release --bin rmde -- path/to/codebase.dme path/to/map.dmm
 ```
 
-The repository pins its Rust toolchain in [`rust-toolchain.toml`](rust-toolchain.toml). On Linux, [`shell.nix`](shell.nix) provides a development shell with the native build dependencies. On macOS, the Vulkan SDK also provides Slang, which the build finds through `VULKAN_SDK`.
+The repository pins its Rust toolchain in [`rust-toolchain.toml`](rust-toolchain.toml). On Linux, [`shell.nix`](shell.nix) provides a development shell with the native build dependencies. The compiled SPIR-V shaders are checked in under `rmd/render/shaders/spirv`, and CI regenerates them. After you edit a `.slang` file, rebuild them locally by running `rmd/render/shaders/compile.sh` with `slangc` on your `PATH`.
 
 ## Multiplayer and co-op
 

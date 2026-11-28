@@ -25,8 +25,8 @@ use crate::{
     renderer::{Sheet, TextureImage},
 };
 
-const VERTEX_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/imgui.vert.spv"));
-const FRAGMENT_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/imgui.frag.spv"));
+const VERTEX_SPIRV: &[u8] = include_bytes!("../shaders/spirv/imgui.vert.spv");
+const FRAGMENT_SPIRV: &[u8] = include_bytes!("../shaders/spirv/imgui.frag.spv");
 const TEXTURE_FORMAT: vk::Format = vk::Format::R8G8B8A8_SRGB;
 const TEXTURE_RESTING: Access = Access::FragmentSampled;
 const FIRST_MINTED_TEXTURE: u64 = 2;

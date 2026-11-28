@@ -1,27 +1,25 @@
-pub(super) const GEOMETRY_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.vert.spv"));
-pub(super) const SPRITE_SHADE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite.frag.spv"));
-pub(super) const SPRITE_SCENE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_scene.frag.spv"));
-pub(super) const SPRITE_VIS_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sprite_visibility.frag.spv"));
+pub(super) const GEOMETRY_VS_SPV: &[u8] = include_bytes!("../../shaders/spirv/sprite.vert.spv");
+pub(super) const SPRITE_SHADE_FS_SPV: &[u8] = include_bytes!("../../shaders/spirv/sprite.frag.spv");
+pub(super) const SPRITE_SCENE_FS_SPV: &[u8] = include_bytes!("../../shaders/spirv/sprite_scene.frag.spv");
+pub(super) const SPRITE_VIS_FS_SPV: &[u8] = include_bytes!("../../shaders/spirv/sprite_visibility.frag.spv");
 pub(super) const SPRITE_OVERLAY_LIGHT_FS_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/sprite_overlay_light.frag.spv"));
+    include_bytes!("../../shaders/spirv/sprite_overlay_light.frag.spv");
 pub(super) const SPRITE_CULL_CLASSIFY_CS_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/sprite_cull_classify.comp.spv"));
-pub(super) const SPRITE_CULL_SCAN_CS_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/sprite_cull_scan.comp.spv"));
-pub(super) const SPRITE_CULL_COMPACT_CS_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/sprite_cull_compact.comp.spv"));
-pub(super) const AREA_COLOR_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/area_color.comp.spv"));
-pub(super) const INTERACTION_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/interaction.vert.spv"));
-pub(super) const INTERACTION_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/interaction.frag.spv"));
-pub(super) const GUIDE_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/guide.vert.spv"));
-pub(super) const GUIDE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/guide.frag.spv"));
-pub(super) const LIGHTING_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lighting.vert.spv"));
-pub(super) const LIGHTING_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lighting.frag.spv"));
-pub(super) const SCENE_RESOLVE_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scene_resolve.frag.spv"));
-pub(super) const BLUR_VS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.vert.spv"));
-pub(super) const BLUR_FS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blur.frag.spv"));
-pub(super) const PICK_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pick.comp.spv"));
-pub(super) const CAPTURE_CS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/capture.comp.spv"));
+    include_bytes!("../../shaders/spirv/sprite_cull_classify.comp.spv");
+pub(super) const SPRITE_CULL_SCAN_CS_SPV: &[u8] = include_bytes!("../../shaders/spirv/sprite_cull_scan.comp.spv");
+pub(super) const SPRITE_CULL_COMPACT_CS_SPV: &[u8] = include_bytes!("../../shaders/spirv/sprite_cull_compact.comp.spv");
+pub(super) const AREA_COLOR_CS_SPV: &[u8] = include_bytes!("../../shaders/spirv/area_color.comp.spv");
+pub(super) const INTERACTION_VS_SPV: &[u8] = include_bytes!("../../shaders/spirv/interaction.vert.spv");
+pub(super) const INTERACTION_FS_SPV: &[u8] = include_bytes!("../../shaders/spirv/interaction.frag.spv");
+pub(super) const GUIDE_VS_SPV: &[u8] = include_bytes!("../../shaders/spirv/guide.vert.spv");
+pub(super) const GUIDE_FS_SPV: &[u8] = include_bytes!("../../shaders/spirv/guide.frag.spv");
+pub(super) const LIGHTING_VS_SPV: &[u8] = include_bytes!("../../shaders/spirv/lighting.vert.spv");
+pub(super) const LIGHTING_FS_SPV: &[u8] = include_bytes!("../../shaders/spirv/lighting.frag.spv");
+pub(super) const SCENE_RESOLVE_FS_SPV: &[u8] = include_bytes!("../../shaders/spirv/scene_resolve.frag.spv");
+pub(super) const BLUR_VS_SPV: &[u8] = include_bytes!("../../shaders/spirv/blur.vert.spv");
+pub(super) const BLUR_FS_SPV: &[u8] = include_bytes!("../../shaders/spirv/blur.frag.spv");
+pub(super) const PICK_CS_SPV: &[u8] = include_bytes!("../../shaders/spirv/pick.comp.spv");
+pub(super) const CAPTURE_CS_SPV: &[u8] = include_bytes!("../../shaders/spirv/capture.comp.spv");
 
 #[cfg(test)]
 mod tests {
