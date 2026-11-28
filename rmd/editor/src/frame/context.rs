@@ -10,12 +10,12 @@ use prefab::{Prefab, PrefabInstanceId};
 use render::{SpriteInstance, SpriteTexture, texture::TextureCatalog};
 use vm::bake::SharedAppearance;
 
-use crate::{environment::world::Perspective, maploader::preview::MapView};
+use crate::{environment::world::Perspective, focus::TurfView, maploader::preview::MapView};
 
 use super::{
     PlacementOrder, RenderedPrefab, TypeVisibility,
     area::{area_edges, area_outline},
-    instance_for, sprite_texture, sprite_texture_or_missing,
+    instance_for, is_placement_hidden, sprite_texture, sprite_texture_or_missing,
     visual::{self, Appearance},
 };
 
@@ -51,6 +51,7 @@ pub(super) struct RenderContext<'a> {
     pub(super) map: MapView<'a>,
     pub(super) area: Option<TypeId>,
     pub(super) visibility: &'a TypeVisibility,
+    pub(super) turf_view: Option<&'a TurfView>,
     pub(super) tile_size: u32,
     pub(super) perspective: Perspective,
 }
@@ -282,7 +283,7 @@ impl RenderContext<'_> {
             }
         }
 
-        if !self.visibility.is_visible(id) {
+        if is_placement_hidden(self.visibility, self.turf_view, id, coord) {
             for sprite in sprites.iter_mut().map(|(_, sprite)| sprite).chain(&mut primary) {
                 sprite.hidden = true;
             }

@@ -1,4 +1,5 @@
 pub(crate) mod session;
+pub(crate) mod turf_view;
 
 use std::collections::HashSet;
 
@@ -6,6 +7,8 @@ use base::coord::Coord;
 use prefab::{Prefab, PrefabInstanceId};
 
 use crate::document::command::Edit;
+
+pub(crate) use turf_view::TurfView;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AreaFocus {

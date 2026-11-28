@@ -26,7 +26,7 @@ use area::{
     repair_area_components,
 };
 use context::RenderContext;
-use options::{FrameRenderOptions, TypeVisibility};
+use options::{FrameRenderOptions, TypeVisibility, is_placement_hidden};
 use pages::{OwnerKeys, SpritePage, replace_owner_sprites};
 use visual::Appearance;
 
@@ -246,6 +246,7 @@ pub fn build_view_with_options(
         map,
         area,
         visibility: options.visibility,
+        turf_view: options.turf_view,
         tile_size: options.tile_size,
         perspective: options.perspective,
     };
@@ -275,7 +276,7 @@ pub fn build_view_with_options(
                             coord,
                             type_id: id,
                             is_area: rendered.is_area,
-                            hidden: !options.visibility.is_visible(id),
+                            hidden: is_placement_hidden(options.visibility, options.turf_view, id, coord),
                         },
                     );
 
@@ -410,7 +411,12 @@ pub fn update_view_prefabs_with_options(
                         coord: current.coord,
                         type_id: current.type_id,
                         is_area: current.is_area,
-                        hidden: !options.visibility.is_visible(current.type_id),
+                        hidden: is_placement_hidden(
+                            options.visibility,
+                            options.turf_view,
+                            current.type_id,
+                            current.coord,
+                        ),
                     },
                 );
                 if current.is_area {
@@ -434,6 +440,7 @@ pub fn update_view_prefabs_with_options(
         map,
         area: tree.roots().area,
         visibility: options.visibility,
+        turf_view: options.turf_view,
         tile_size: options.tile_size,
         perspective: options.perspective,
     };

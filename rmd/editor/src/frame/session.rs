@@ -4,11 +4,12 @@ use objtree::{Roots, TypeId};
 use prefab::{Prefab, PrefabInstanceId};
 use render::{Frame, GuideLine, MapViewFrame, MapViewInteraction, MapViewRect, SpritePreview};
 
+use crate::node;
 use crate::session::Session;
 use crate::{
     bake,
     document::{DocumentId, selection::Selection},
-    focus::AreaFocus,
+    focus::{AreaFocus, turf_view::refresh_turf_view},
     frame::{
         self, FrameInstances, PrefabUpdate,
         options::{FrameRenderOptions, HiddenTypes},
@@ -128,7 +129,9 @@ impl Session {
     fn apply_type_visibility(&mut self) {
         for id in self.rendered_document_ids() {
             let update = self.caches.get_mut(&id).map_or(PrefabUpdate::Unchanged, |cache| {
-                cache.instances.apply_visibility(&self.type_visibility)
+                cache
+                    .instances
+                    .apply_visibility(&self.type_visibility, cache.turf_view.as_ref())
             });
             self.publish_frame_update(id, update);
         }
@@ -260,6 +263,7 @@ impl Session {
     pub(crate) fn rebuild_instances(&mut self, id: DocumentId) {
         if let Some(cache) = self.caches.get_mut(&id) {
             drop(std::mem::take(&mut cache.instances));
+            refresh_turf_view(cache, self.state.environment.as_deref(), self.state.document(id));
         }
 
         let names = bake::icon_names(
@@ -270,7 +274,7 @@ impl Session {
         self.register_icons(names);
 
         let bake = self.caches.get(&id).and_then(|cache| cache.bake.as_ref());
-        let node_types = crate::node::session::registered_types(self.state.environment.as_deref(), bake);
+        let node_types = node::session::registered_types(self.state.environment.as_deref(), bake);
         let instances = match (self.state.environment.as_ref(), self.effective_grid(id)) {
             (Some(environment), Some(grid)) => frame::build_view_with_options(
                 &environment.tree,
@@ -280,8 +284,9 @@ impl Session {
                     perspective: environment.world.perspective,
                     node_types: Some(&node_types),
                     visibility: &self.type_visibility,
+                    turf_view: self.caches.get(&id).and_then(|cache| cache.turf_view.as_ref()),
                     tile_size: self.options.tile_size,
-                    appearances: crate::bake::appearances(bake),
+                    appearances: bake::appearances(bake),
                     lighting: bake.and_then(|bake| bake.lighting.as_ref()),
                 },
             ),

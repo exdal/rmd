@@ -7,12 +7,15 @@ use std::{
 
 use objtree::{Builtins, TypeId};
 use prefab::{Prefab, PrefabInstanceId};
-use render::{FrameUpdate, texture::TextureCatalog};
+use render::{FrameUpdate, LightingUpdate, texture::TextureCatalog};
+use vm::bake::{Bake, Highlight};
 
 use crate::{
-    bake::worker::Baker,
+    bake::{self, session::LoggedFault, worker::Baker},
     coop::Coop,
     document::{DocumentId, state::EditorState},
+    environment::LoadDiagnostics,
+    focus::TurfView,
     frame::{
         FrameInstances,
         options::{FrameOptions, TypeVisibility},
@@ -20,11 +23,12 @@ use crate::{
     },
     git::{session::GitDocState, worker::GitWorker},
     inspector::session::IdenticalCache,
+    issues::session::IssueGroups,
     maploader::preview::ModulePreviewState,
     node::session::NodeEditState,
     palette::session::PrefabThumbnail,
     region::session::RegionState,
-    viewport::{highlight, preview::RegionPreviewCache},
+    viewport::{highlight::UnknownHighlights, preview::RegionPreviewCache},
 };
 
 #[cfg(test)]
@@ -49,29 +53,30 @@ pub(crate) struct DocumentCache {
     pub(crate) revision: u64,
     pub(crate) frame_updates: Vec<FrameUpdate>,
     pub(crate) lighting_revision: u64,
-    pub(crate) lighting_updates: Vec<render::LightingUpdate>,
+    pub(crate) lighting_updates: Vec<LightingUpdate>,
     pub(crate) preview: Option<RegionPreviewCache>,
-    pub(crate) bake: Option<crate::bake::Bake>,
+    pub(crate) bake: Option<Bake>,
     pub(crate) bake_hold: BakeHold,
     // edited while the bake was off growing by a level, replayed when it comes back
     pub(crate) unbaked: Vec<PrefabInstanceId>,
     pub(crate) always_highlights: Vec<PrefabInstanceId>,
-    pub(crate) unknown_highlights: RefCell<highlight::UnknownHighlights>,
-    pub(crate) issues: RefCell<crate::issues::session::IssueGroups>,
+    pub(crate) turf_view: Option<TurfView>,
+    pub(crate) unknown_highlights: RefCell<UnknownHighlights>,
+    pub(crate) issues: RefCell<IssueGroups>,
     /// What a replayed panel frame asked this document to re-derive, held until it is active.
-    pub(crate) pending_rebake: crate::bake::UiRebake,
+    pub(crate) pending_rebake: bake::UiRebake,
     pub(crate) git: Option<GitDocState>,
     pub(crate) map_revision: u64,
-    pub(crate) runtimes: Vec<crate::bake::session::LoggedFault>,
+    pub(crate) runtimes: Vec<LoggedFault>,
 }
 
-pub(crate) type SharedHighlights = Arc<[crate::bake::Highlight]>;
+pub(crate) type SharedHighlights = Arc<[Highlight]>;
 
 pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
     pub options: FrameOptions,
-    pub diagnostics: crate::environment::LoadDiagnostics,
+    pub diagnostics: LoadDiagnostics,
     pub(crate) caches: HashMap<DocumentId, DocumentCache>,
     pub(crate) next_revision: u64,
     pub(crate) next_preview_revision: u64,
@@ -88,12 +93,12 @@ pub struct Session {
     pub(crate) loaded_conflicts: Option<DocumentId>,
     pub(crate) loaded_issues: Option<DocumentId>,
     pub(crate) queued_bakes: Vec<DocumentId>,
-    pub(crate) standalone_baker: crate::bake::Standalone,
+    pub(crate) standalone_baker: bake::Standalone,
     pub(crate) standalone: Vec<(Prefab, Option<visual::Appearance>)>,
     pub(crate) logged_faults: HashSet<vm::FaultKey>,
     pub(crate) logged_ui_fault: Option<vm::FaultKey>,
     /// The last interaction the panel committed, replayed into a bake that lands after it.
-    pub(crate) ui_feedback: Option<crate::bake::UiFeedback>,
+    pub(crate) ui_feedback: Option<bake::UiFeedback>,
     pub(crate) node_edit: Option<NodeEditState>,
     pub(crate) identical: Option<IdenticalCache>,
     pub(crate) coop: Option<Coop>,
@@ -121,7 +126,7 @@ impl Session {
             state: EditorState::new(),
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
-            diagnostics: crate::environment::LoadDiagnostics::default(),
+            diagnostics: LoadDiagnostics::default(),
             caches: HashMap::new(),
             next_revision: 1,
             next_preview_revision: 1,
@@ -137,7 +142,7 @@ impl Session {
             loaded_conflicts: None,
             loaded_issues: None,
             queued_bakes: Vec::new(),
-            standalone_baker: crate::bake::Standalone::default(),
+            standalone_baker: bake::Standalone::default(),
             standalone: Vec::new(),
             logged_faults: HashSet::new(),
             logged_ui_fault: None,

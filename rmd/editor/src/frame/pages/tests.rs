@@ -123,7 +123,7 @@ fn toggling_visibility_flags_the_cached_sprites_and_restores_them_exactly() {
     let mut visibility = TypeVisibility::default();
 
     visibility.set_subtree(&tree, table, false);
-    let PrefabUpdate::Buffers { sprites } = instances.apply_visibility(&visibility) else {
+    let PrefabUpdate::Buffers { sprites } = instances.apply_visibility(&visibility, None) else {
         panic!("hiding a placed type must flag its sprites");
     };
     for range in &sprites {
@@ -142,6 +142,7 @@ fn toggling_visibility_flags_the_cached_sprites_and_restores_them_exactly() {
             perspective: Perspective::TopDown,
             node_types: None,
             visibility: &visibility,
+            turf_view: None,
             tile_size: 32,
             appearances: &std::collections::HashMap::new(),
             lighting: None,
@@ -150,11 +151,11 @@ fn toggling_visibility_flags_the_cached_sprites_and_restores_them_exactly() {
     assert_eq!(instances.sprites, rebuilt.sprites);
     assert!(tables.iter().all(|table| instances.sprite(*table).is_none()));
     assert_pages_hold(&instances);
-    assert_eq!(instances.apply_visibility(&visibility), PrefabUpdate::Unchanged);
+    assert_eq!(instances.apply_visibility(&visibility, None), PrefabUpdate::Unchanged);
 
     visibility.set_subtree(&tree, table, true);
     assert!(matches!(
-        instances.apply_visibility(&visibility),
+        instances.apply_visibility(&visibility, None),
         PrefabUpdate::Buffers { .. }
     ));
     assert_eq!(instances.sprites, original);

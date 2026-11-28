@@ -57,6 +57,7 @@ pub(super) enum Action {
     Replace(PrefabInstanceId, TreePath),
     Search(PrefabInstanceId, SimilarMatchKind),
     Node(NodeContext),
+    ViewFromTurf(Coord),
     Mirror(SelectionTransform),
     Stash(StashMode),
     RemoveFromStash(DocumentId),
@@ -95,6 +96,8 @@ pub(super) fn draw_popup(ui: &Ui, session: &mut Session, settings: &Settings, ta
     action = draw_blame_menu(ui, session, target, coord, action);
 
     action = draw_node_action(ui, session, target, action);
+
+    action = draw_turf_view_action(ui, session, target, coord, action);
 
     let is_stash = session.is_stash_active();
     if !is_stash {
@@ -239,6 +242,20 @@ fn draw_node_action(ui: &Ui, session: &Session, target: &Target, mut action: Opt
         ) {
             action = Some(Action::Node(node.clone()));
         }
+    }
+    action
+}
+
+fn draw_turf_view_action(
+    ui: &Ui, session: &Session, target: &Target, coord: Coord, mut action: Option<Action>,
+) -> Option<Action> {
+    ui.separator();
+    if ui.menu_item_enabled_selected_no_shortcut(
+        "View from turf",
+        session.turf_view_origin(target.document) == Some(coord),
+        session.can_view_from_turf(target.document),
+    ) {
+        action = Some(Action::ViewFromTurf(coord));
     }
     action
 }

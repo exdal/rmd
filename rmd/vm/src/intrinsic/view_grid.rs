@@ -1,3 +1,8 @@
+use std::collections::HashSet;
+
+// hopefully it is good enough default
+pub const DEFAULT_VIEW_SIZE: (i32, i32) = (11, 11);
+
 #[derive(Clone, Copy)]
 pub(crate) enum Sight {
     Through,
@@ -190,4 +195,64 @@ pub(crate) fn dantom_spiral(center: (i32, i32), size: (i32, i32)) -> Vec<(i32, i
     }
 
     tiles
+}
+
+fn view_axis<T: TryInto<i32>>(radius: T) -> i32 {
+    radius
+        .try_into()
+        .unwrap_or(i32::MAX)
+        .saturating_mul(2)
+        .saturating_add(1)
+}
+
+pub fn view_span(distance: f32) -> (i32, i32) {
+    let span = view_axis(distance.max(0.0) as i32);
+
+    (span, span)
+}
+
+pub fn view_box(text: &str) -> Option<(i32, i32)> {
+    let (width, height) = text.split_once('x')?;
+    let (Ok(width), Ok(height)) = (width.trim().parse::<i32>(), height.trim().parse::<i32>()) else {
+        return None;
+    };
+
+    Some((width.max(0), height.max(0)))
+}
+
+pub fn clamp_view_size<T: TryInto<i32>>(size: (i32, i32), (width, height): (T, T)) -> (i32, i32) {
+    (size.0.min(view_axis(width)), size.1.min(view_axis(height)))
+}
+
+/// `opacity` is asked for every tile of the box in row order and answers `None` where there is no turf
+pub fn visible_tiles<E>(
+    origin: (i32, i32), size: (i32, i32), mut opacity: impl FnMut(i32, i32) -> Result<Option<bool>, E>,
+) -> Result<HashSet<(i32, i32)>, E> {
+    let (low_x, low_y) = (origin.0 - size.0 / 2, origin.1 - size.1 / 2);
+    let mut grid = ViewGrid::new(size.0, size.1);
+    for grid_y in 0..size.1 {
+        for grid_x in 0..size.0 {
+            let Some(is_opaque) = opacity(low_x + grid_x, low_y + grid_y)? else {
+                continue;
+            };
+
+            grid.tiles[(grid_y * size.0 + grid_x) as usize] = Some(ViewTile {
+                is_opaque,
+                vis: 0,
+                vis2: 0,
+            });
+        }
+    }
+
+    grid.calculate();
+    let mut visible = HashSet::new();
+    for grid_y in 0..size.1 {
+        for grid_x in 0..size.0 {
+            if grid.get(grid_x, grid_y).is_some_and(|tile| tile.vis != 0) {
+                visible.insert((low_x + grid_x, low_y + grid_y));
+            }
+        }
+    }
+
+    Ok(visible)
 }

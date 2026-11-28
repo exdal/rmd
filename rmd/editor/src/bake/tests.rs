@@ -41,6 +41,7 @@ fn options<'a>(
         perspective: Perspective::TopDown,
         node_types: None,
         visibility,
+        turf_view: None,
         tile_size: 32,
         appearances: appearances(Some(bake)),
         lighting: bake.lighting.as_ref(),

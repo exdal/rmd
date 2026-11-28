@@ -1,4 +1,4 @@
-use base::{path::TreePath, types::Identifier};
+use base::{coord::Coord, path::TreePath, types::Identifier};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -8,7 +8,7 @@ use objtree::{ObjectTree, TypeId};
 use prefab::Prefab;
 use vm::bake::{LightingMap, SharedAppearance};
 
-use crate::environment::world::Perspective;
+use crate::{environment::world::Perspective, focus::TurfView};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TypeVisibility {
@@ -111,10 +111,17 @@ impl FromIterator<TreePath> for HiddenTypes {
     }
 }
 
+pub(super) fn is_placement_hidden(
+    visibility: &TypeVisibility, turf_view: Option<&TurfView>, id: TypeId, coord: Coord,
+) -> bool {
+    !visibility.is_visible(id) || turf_view.is_some_and(|view| !view.allows(coord))
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FrameRenderOptions<'a> {
     pub node_types: Option<&'a HashSet<TypeId>>,
     pub visibility: &'a TypeVisibility,
+    pub turf_view: Option<&'a TurfView>,
     pub tile_size: u32,
     /// What the bake made of each atom, keyed by `vm::bake` atom id, empty when baking is off
     pub appearances: &'a HashMap<u64, SharedAppearance>,

@@ -504,6 +504,43 @@ fn profile_highlights_are_clipped_edged_and_restored_across_edits() {
 }
 
 #[test]
+fn bake_view_from_stops_at_opaque_walls() {
+    let (tree, module) = compile(fixture!("programs/bake_view_from_stops_at_opaque_walls.dm"));
+    let ty = |path: &str| tree.id_of(&TreePath::parse(path)).expect("fixture type");
+    let mut atoms = Vec::new();
+    for y in 1..=3 {
+        for x in 1..=7 {
+            let turf = if x == 4 { "/turf/wall" } else { "/turf/floor" };
+            for path in ["/area/zone", turf] {
+                atoms.push(Atom {
+                    instance: atoms.len() as u64 + 1,
+                    ty: ty(path),
+                    position: Position::new(x, y, 1),
+                    vars: Vec::new(),
+                });
+            }
+        }
+    }
+    let mut bake = Bake::new(
+        &tree,
+        &module,
+        atoms,
+        [7, 3, 1],
+        Limits::default(),
+        IconStates::default(),
+    );
+
+    assert_eq!(bake.diagnostics.count(), 0, "{:?}", bake.diagnostics);
+    let visible = bake
+        .view_from(&tree, &module, Position::new(2, 2, 1))
+        .expect("view_from should run");
+    assert!(visible.contains(&[2, 2]));
+    assert!(visible.contains(&[3, 2]));
+    assert!(visible.contains(&[4, 2]), "the wall itself is seen");
+    assert!(!visible.contains(&[6, 2]), "the room behind the wall is hidden");
+}
+
+#[test]
 fn profile_ui_draws_widgets_and_reads_back_what_the_editor_remembers() {
     let (tree, module) = compile(fixture!(
         "programs/profile_ui_draws_widgets_and_reads_back_what_the_editor_remembers.dm"
