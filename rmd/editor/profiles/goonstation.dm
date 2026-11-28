@@ -439,6 +439,14 @@
 	demir_bake_icon()
 	demir_bake_extras()
 
+// Landmarks are invisible in game. Draw them unlit and on top so they stay readable in dark areas.
+/obj/landmark/demir_bake_appearance()
+	. = ..()
+	plane = PLANE_ABOVE_LIGHTING
+	var/image/unlit = image(icon, icon_state, dir = dir)
+	unlit.demir_emissive = TRUE
+	overlays += unlit
+
 /obj/table/demir_bake_appearance()
 	if(auto && materialless_icon_state() == "0")
 		set_up()

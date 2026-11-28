@@ -668,6 +668,21 @@
 /atom/proc/demir_bake_appearance()
 	demir_bake_smoothing()
 
+// Landmarks and mapping helpers are invisible in game. Draw them unlit and on top so they stay readable in dark areas.
+/atom/proc/demir_draw_unlit_on_top()
+	plane = ABOVE_LIGHTING_PLANE
+	var/image/unlit = image(icon, icon_state, dir = dir)
+	unlit.demir_emissive = TRUE
+	overlays += unlit
+
+/obj/effect/landmark/demir_bake_appearance()
+	. = ..()
+	demir_draw_unlit_on_top()
+
+/obj/effect/mapping_helpers/demir_bake_appearance()
+	. = ..()
+	demir_draw_unlit_on_top()
+
 // reform_connections() redraws every neighbor it links, and a bake exports each neighbor it changed.
 // The neighbors would export an appearance that knows only this cable, so only the baked cable
 // redraws. linkup_adjacent() builds the powernet and is left out.

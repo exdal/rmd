@@ -162,6 +162,21 @@
 	if(smoothing_flags & USES_SMOOTHING)
 		smooth_icon()
 
+// Landmarks and mapping helpers are invisible in game. Draw them unlit and on top so they stay readable in dark areas.
+/atom/proc/demir_draw_unlit_on_top()
+	plane = ABOVE_LIGHTING_PLANE
+	var/image/unlit = image(icon, icon_state, dir = dir)
+	unlit.demir_emissive = TRUE
+	overlays += unlit
+
+/obj/effect/landmark/demir_bake_appearance()
+	. = ..()
+	demir_draw_unlit_on_top()
+
+/obj/effect/mapping_helpers/demir_bake_appearance()
+	. = ..()
+	demir_draw_unlit_on_top()
+
 /atom/proc/demir_finish_appearance()
 	return
 

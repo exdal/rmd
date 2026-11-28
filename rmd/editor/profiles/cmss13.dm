@@ -177,6 +177,17 @@
 /atom/proc/demir_bake_icon()
 	return
 
+// Landmarks and mapping helpers are invisible in game. Draw them unlit and on top so they stay readable in dark areas.
+/atom/proc/demir_draw_unlit_on_top()
+	plane = ABOVE_LIGHTING_PLANE
+	var/image/unlit = image(icon, icon_state, dir = dir)
+	unlit.demir_emissive = TRUE
+	overlays += unlit
+
+/obj/effect/landmark/demir_bake_icon()
+	. = ..()
+	demir_draw_unlit_on_top()
+
 /turf/closed/wall/demir_bake_icon()
 	update_connections(FALSE)
 	update_icon()
